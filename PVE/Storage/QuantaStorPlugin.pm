@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use IO::File;
-use JSON qw(decode_json);
+use JSON;
 use HTTP::Request;
 use LWP::UserAgent;
 use URI::Escape;
@@ -38,13 +38,13 @@ use base qw(PVE::Storage::Plugin);
 # }
 
 sub qs_api_call {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - get_request");
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_api_call");
     my ($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout) = @_;
 
     # Set a default timeout if not provided
     $timeout //= 10;
 
-    my $url = "https://$server_ip:8153/qstorapi/$api_name";
+    my $url = "https://$server_ip:8153/qstorapi/$api_name";   
 
     # Add query parameters to the URL if provided
     if ($query_params && %$query_params) {
@@ -79,6 +79,51 @@ sub qs_api_call {
     # Prepare HTTP GET request
     print "URL: $url\n";
     my $response = $ua->get($url);
+
+    # Check response status
+    if ($response->is_success) {
+        return decode_json($response->decoded_content); # Return raw Perl data structure
+    } else {
+        print "Response content: " . $response->decoded_content . "\n";
+        die "HTTP GET Request failed: " . $response->status_line;
+    }
+
+    return '';
+}
+
+sub qs_storage_pool_enum {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_storage_pool_enum");
+    my ($server_ip, $username, $password, $cert_path, $timeout) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+
+    my $api_name = 'storagePoolEnum';
+    my $query_params = {  };
+    
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    # qs_write_to_log("QuantaStorPlugin - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+sub qs_storage_volume_enum {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_storage_volume_enum");
+    my ($server_ip, $username, $password, $cert_path, $timeout) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+
+    my $api_name = 'storageVolumeEnum';
+    my $query_params = {  };
+    
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    # qs_write_to_log("QuantaStorPlugin - qs_storage_volume_enum - Response:\n$pretty_result\n");
+
     return $response;
 }
 
@@ -108,7 +153,7 @@ sub qs_ls {
     PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_ls");
     my ($scfg, $storeid) = @_;
 
-    my $portal = $scfg->{portal};
+    my $server = $scfg->{server};
     my $list = {};
     my %unittobytes = (
        "k"  => 1024,
@@ -117,7 +162,29 @@ sub qs_ls {
        "T"   => 1024*1024*1024*1024
     );
     eval {
+        # here we can run code to ask quantastor what volumes are available.
+        my $pool_id = $scfg->{qspoolid} // '';
+        PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_ls - qspoolid = $pool_id");
+        my $res = qs_storage_volume_enum($scfg->{server}, $scfg->{username}, $scfg->{password}, '', 300);
+        
+        # Filter volumes by storagePoolId
+        my @filtered_volumes = grep { $_->{storagePoolId} eq $pool_id } @$res;
+        # print encode_json(\@filtered_volumes), "\n";
 
+        # Print the name (iqn) and size of each filtered volume
+        foreach my $volume (@filtered_volumes) {
+            my $id = $volume->{id} // "No ID";
+            my $name = $volume->{name} // "No Name";
+            my $size = $volume->{size} // 0;
+            my $iqn = $volume->{iqn} // "No SCSI ID";
+            print "Name: $name, ID $id, Size: $size bytes, iqn: $iqn\n";
+
+            $list->{$storeid}->{$id} = {
+	            name => $name,
+	            size => $size,
+		        format => 'raw',
+	        };
+        }
 
 	    # $list->{$storeid}->{$image} = {
 	    #     name => $image,
@@ -143,15 +210,15 @@ sub type {
 sub plugindata {
     qs_write_to_log("QuantaStorPlugin - plugindata");
     return {
-	content => [ {images => 1, none => 1}, { images => 1 }],
-	select_existing => 1,
+	content => [ {images => 1, rootdir => 1}, {images => 1 , rootdir => 1}],
+	format => [ { raw => 1, subvol => 1 } , 'raw' ],
     };
 }
 
 sub properties {
     qs_write_to_log("QuantaStorPlugin - options");
     return {
-	qStoragePoolId => {
+	qspoolid => {
 	    description => "UUID to identify a QuantaStor Storage Pool.",
 	    type => 'string',
 	    maxLength => 256,
@@ -162,14 +229,12 @@ sub properties {
 sub options {
     qs_write_to_log("QuantaStorPlugin - options");
     return {
-	qStoragePoolId => { fixed => 1 },
+	qspoolid => { fixed => 1 },
 	server => { fixed => 1 },
     username => { fixed => 1 },
 	nodes => { optional => 1 },
-	disable => { optional => 1 },
-	bwlimit => { optional => 1 },
-    path => { optional => 1},
-	options => { optional => 1 },
+    disable => {optional => 1},
+    mountpoint => { optional => 1 },
     };
 }
 
@@ -177,7 +242,7 @@ sub check_config {
     qs_write_to_log("QuantaStorPlugin - check_config");
     my ($class, $sectionId, $config, $create, $skipSchemaCheck) = @_;
 
-    $config->{path} = "/mnt/pve/$sectionId" if $create && !$config->{path};
+    # here we can add more stuff to our config if needed.
 
     return $class->SUPER::check_config($sectionId, $config, $create, $skipSchemaCheck);
 }
@@ -189,9 +254,23 @@ sub qs_discovery {
     my ($server, $username, $password) = @_;
     qs_write_to_log("QuantaStorPlugin - scanning... $server , $username , $password");
 
-    my $res = {};
+    my $res = qs_storage_pool_enum($server, $username, $password, '', 300);    
 
-    return $res;
+    # here we need to return a respose array that contains the info about the available ZFS pools
+    # on each quantastor storage pool.
+    # Collect all ZFS pool names - only collect pool names and ID that are local to the provided server IP address
+    my @zfsPoolNames = map { { name => $_->{name}, id => $_->{id} } }
+                   grep { exists $_->{name} && exists $_->{id} && exists $_->{isRemote} && $_->{isRemote} == 0 } 
+                   @$res;
+
+    # Print collected pool names
+    if (@zfsPoolNames) {
+        print "ZFS Pool Names and UUIDs: " . join(", ", map { "$_->{name} (ID: $_->{id})" } @zfsPoolNames) . "\n";
+    } else {
+        print "No ZFS pools found.\n";
+    }
+
+    return @zfsPoolNames;
 }
 
 sub qs_set_credentials {
@@ -389,6 +468,8 @@ sub on_add_hook {
 	qs_delete_master_pubkey($scfg, $storeid);
     }
 
+    # we also want to get the mountpoint here see ZFSPoolPlugin
+
     return $res;
 }
 
@@ -425,14 +506,16 @@ sub check_connection {
 
     # TODO: need to get password first from cred file and pass it in
     my $api_name = 'storageSystemGet';
-    my $response = qs_api_call($scfg->{server},$scfg->{username},'password',$api_name,{},'',15);
-
-    if ($response->is_success) {
+    my $response = qs_api_call($scfg->{server},$scfg->{username},$scfg->{password},$api_name,{},'',15);
+    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    if ($response ne '') {
         # DEBUG
-        qs_write_to_log("QuantaStorPlugin - Response content: " . $response->decoded_content . "\n");
+        # qs_write_to_log("QuantaStorPlugin - Response content: " . $pretty_result . "\n");
+        qs_write_to_log("QuantaStorPlugin - Success - check_connection");
         return 1;
     } else {
-        qs_write_to_log("QuantaStorPlugin - Response content: " . $response->decoded_content . "\n");
+        # qs_write_to_log("QuantaStorPlugin - Response content: " . $pretty_result . "\n");
+        qs_write_to_log("QuantaStorPlugin - Failed - check_connection");
         return 0;
     }
     return 1;
@@ -449,7 +532,7 @@ sub on_delete_hook {
 
 sub parse_volname {
     my ($class, $volname) = @_;
-    $class->qs_write_to_log("parse_volname : volname " + $volname);
+    $class->qs_write_to_log("parse_volname : volname $volname");
 
     if ($volname =~ m/^lun(\d+)$/) {
 	return ('images', $1, undef, undef, undef, undef, 'raw');
@@ -468,10 +551,10 @@ sub path {
 
     my ($vtype, $lun, $vmid) = $class->parse_volname($volname);
 
-    my $target = $scfg->{target};
-    my $portal = $scfg->{portal};
+    my $pool = $scfg->{pool};
+    my $server = $scfg->{server};
 
-    my $path = "iscsi://$portal/$target/$lun";
+    my $path = "";
 
     return ($path, $vmid, $vtype);
 }
@@ -518,8 +601,8 @@ sub list_images {
     if (my $dat = $cache->{quantastor}->{$storeid}) {
 
         foreach my $volname (keys %$dat) {
-
             my $volid = "$storeid:$volname";
+            PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - volid = $volid");
 
             if ($vollist) {
                 my $found = grep { $_ eq $volid } @$vollist;
@@ -531,7 +614,7 @@ sub list_images {
 
             my $info = $dat->{$volname};
             $info->{volid} = $volid;
-
+            PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - Pushing in volume info $info->{volid}");
             push @$res, $info;
         }
     }

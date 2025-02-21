@@ -664,11 +664,11 @@ our $cmddef = {
 
 	    my $maxlen = 0;
 	    foreach my $rec (@$res) {
-		my $len = length ($rec->{target});
+		my $len = length ($rec->{pool});
 		$maxlen = $len if $len > $maxlen;
 	    }
 	    foreach my $rec (@$res) {
-		printf "%-${maxlen}s %s\n", $rec->{target}, $rec->{portal};
+		printf "%-${maxlen}s %-${maxlen}s %s\n", $rec->{pool}, $rec->{qsid}, $rec->{server};
 	    }
 	}],
 	lvm => [ "PVE::API2::Storage::Scan", 'lvmscan', [], { node => $nodename }, sub  {
