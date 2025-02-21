@@ -305,7 +305,7 @@ __PACKAGE__->register_method({
 	    node => get_standard_option('pve-node'),
 	    portal => {
 		description => "The iSCSI portal (IP or DNS name with optional port).",
-		type => 'string', format => 'pve-storage-portal-dns',
+		type => 'string', format => 'pve-storage-server',
 	    },
 	},
     },
@@ -328,7 +328,68 @@ __PACKAGE__->register_method({
     code => sub {
 	my ($param) = @_;
 
+	# call the iscsi scan Storage API
 	my $res = PVE::Storage::scan_iscsi($param->{portal});
+
+	my $data = [];
+	foreach my $k (sort keys %$res) {
+	    push @$data, { target => $k, portal => join(',', @{$res->{$k}}) };
+	}
+
+	return $data;
+    }});
+
+__PACKAGE__->register_method({
+    name => 'quantastorscan',
+    path => 'quantastor',
+    method => 'GET',
+    description => "Scan remote quantastor server.",
+    protected => 1,
+    proxyto => "node",
+    permissions => {
+	check => ['perm', '/storage', ['Datastore.Allocate']],
+    },
+    parameters => {
+	additionalProperties => 0,
+	properties => {
+	    node => get_standard_option('pve-node'),
+	    server => {
+		description => "The quantastor host (IP or DNS name with optional port).",
+		type => 'string', format => 'pve-storage-portal-dns',
+	    },
+		username => {
+		description => "User-name or API token-ID.",
+		type => 'string',
+	    },
+	    password => {
+		description => "User password or API token secret.",
+		type => 'string',
+	    },
+	},
+    },
+    returns => {
+	type => 'array',
+	items => {
+	    type => "object",
+	    properties => {
+		target => {
+		    description => "The iSCSI target name.",
+		    type => 'string',
+		},
+		portal => {
+		    description => "The iSCSI portal name.",
+		    type => 'string',
+		},
+	    },
+	},
+    },
+    code => sub {
+	my ($param) = @_;
+
+	my $password = delete $param->{password};
+
+	# call the quantastor scan Storage API
+	my $res = PVE::Storage::QuantaStorPlugin::qs_discovery($param->{server},$param->{username},$password);
 
 	my $data = [];
 	foreach my $k (sort keys %$res) {

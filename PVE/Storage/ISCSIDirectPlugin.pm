@@ -8,10 +8,12 @@ use LWP::UserAgent;
 use PVE::Tools qw(run_command file_read_firstline trim dir_glob_regex dir_glob_foreach);
 use PVE::Storage::Plugin;
 use PVE::JSONSchema qw(get_standard_option);
+use PVE::Storage::QuantaStorPlugin;
 
 use base qw(PVE::Storage::Plugin);
 
 sub iscsi_ls {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - iscsi_ls");
     my ($scfg, $storeid) = @_;
 
     my $portal = $scfg->{portal};
@@ -52,10 +54,12 @@ sub iscsi_ls {
 # Configuration
 
 sub type {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - type");
     return 'iscsidirect';
 }
 
 sub plugindata {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - plugindata");
     return {
 	content => [ {images => 1, none => 1}, { images => 1 }],
 	select_existing => 1,
@@ -63,6 +67,7 @@ sub plugindata {
 }
 
 sub options {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - options");
     return {
         portal => { fixed => 1 },
         target => { fixed => 1 },
@@ -76,6 +81,7 @@ sub options {
 # Storage implementation
 
 sub parse_volname {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - parse_volname");
     my ($class, $volname) = @_;
 
 
@@ -88,6 +94,7 @@ sub parse_volname {
 }
 
 sub path {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - path");
     my ($class, $scfg, $volname, $storeid, $snapname) = @_;
 
     die "volume snapshot is not possible on iscsi device"
@@ -104,24 +111,28 @@ sub path {
 }
 
 sub create_base {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - create_base");
     my ($class, $storeid, $scfg, $volname) = @_;
 
     die "can't create base images in iscsi storage\n";
 }
 
 sub clone_image {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - clone_image");
     my ($class, $scfg, $storeid, $volname, $vmid, $snap) = @_;
 
     die "can't clone images in iscsi storage\n";
 }
 
 sub alloc_image {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - alloc_image");
     my ($class, $storeid, $scfg, $vmid, $fmt, $name, $size) = @_;
 
     die "can't allocate space in iscsi storage\n";
 }
 
 sub free_image {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - free_image");
     my ($class, $storeid, $scfg, $volname, $isBase) = @_;
 
     die "can't free space in iscsi storage\n";
@@ -129,6 +140,7 @@ sub free_image {
 
 
 sub list_images {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - list_images");
     my ($class, $storeid, $scfg, $vmid, $vollist, $cache) = @_;
 
     my $res = [];
@@ -165,6 +177,7 @@ sub list_images {
 
 
 sub status {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - status");
     my ($class, $storeid, $scfg, $cache) = @_;
 
     my $total = 0;
@@ -177,16 +190,19 @@ sub status {
 }
 
 sub activate_storage {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - activate_storage");
     my ($class, $storeid, $scfg, $cache) = @_;
     return 1;
 }
 
 sub deactivate_storage {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - deactivate_storage");
     my ($class, $storeid, $scfg, $cache) = @_;
     return 1;
 }
 
 sub activate_volume {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - activate_volume");
     my ($class, $storeid, $scfg, $volname, $snapname, $cache) = @_;
 
     die "volume snapshot is not possible on iscsi device" if $snapname;
@@ -195,6 +211,7 @@ sub activate_volume {
 }
 
 sub deactivate_volume {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - deactivate_volume");
     my ($class, $storeid, $scfg, $volname, $snapname, $cache) = @_;
 
     die "volume snapshot is not possible on iscsi device" if $snapname;
@@ -203,6 +220,7 @@ sub deactivate_volume {
 }
 
 sub volume_size_info {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - volume_size_info");
     my ($class, $scfg, $storeid, $volname, $timeout) = @_;
 
     my $vollist = iscsi_ls($scfg,$storeid);
@@ -212,26 +230,31 @@ sub volume_size_info {
 }
 
 sub volume_resize {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - volume_resize");
     my ($class, $scfg, $storeid, $volname, $size, $running) = @_;
     die "volume resize is not possible on iscsi device";
 }
 
 sub volume_snapshot {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - volume_snapshot");
     my ($class, $scfg, $storeid, $volname, $snap) = @_;
     die "volume snapshot is not possible on iscsi device";
 }
 
 sub volume_snapshot_rollback {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - volume_snapshot_rollback");
     my ($class, $scfg, $storeid, $volname, $snap) = @_;
     die "volume snapshot rollback is not possible on iscsi device";
 }
 
 sub volume_snapshot_delete {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - volume_snapshot_delete");
     my ($class, $scfg, $storeid, $volname, $snap) = @_;
     die "volume snapshot delete is not possible on iscsi device";
 }
 
 sub volume_has_feature {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - volume_has_feature");
     my ($class, $scfg, $feature, $storeid, $volname, $snapname, $running) = @_;
     
     my $features = {

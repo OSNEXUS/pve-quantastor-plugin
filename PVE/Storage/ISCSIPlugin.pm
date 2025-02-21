@@ -10,6 +10,7 @@ use IO::File;
 use PVE::JSONSchema qw(get_standard_option);
 use PVE::Storage::Plugin;
 use PVE::Tools qw(run_command file_read_firstline trim dir_glob_regex dir_glob_foreach $IPV4RE $IPV6RE);
+use PVE::Storage::QuantaStorPlugin;
 
 use base qw(PVE::Storage::Plugin);
 
@@ -95,6 +96,7 @@ sub iscsi_portals {
 }
 
 sub iscsi_discovery {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - iscsi_discovery");
     my ($portals) = @_;
 
     assert_iscsi_support();

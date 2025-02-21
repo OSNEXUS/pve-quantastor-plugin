@@ -25,6 +25,9 @@ use constant COMPRESSOR_RE => join('|', KNOWN_COMPRESSION_FORMATS);
 use constant LOG_EXT => ".log";
 use constant NOTES_EXT => ".notes";
 
+# debug
+use PVE::Storage::QuantaStorPlugin;
+
 our @COMMON_TAR_FLAGS = qw(
     --one-file-system
     -p --sparse --numeric-owner --acls
@@ -1372,6 +1375,7 @@ sub volume_snapshot_info {
 }
 
 sub activate_storage {
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("Plugin.pm - activate_storage");
     my ($class, $storeid, $scfg, $cache) = @_;
 
     my $path = $scfg->{path};

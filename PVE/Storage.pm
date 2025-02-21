@@ -34,12 +34,14 @@ use PVE::Storage::ISCSIPlugin;
 use PVE::Storage::RBDPlugin;
 use PVE::Storage::CephFSPlugin;
 use PVE::Storage::ISCSIDirectPlugin;
+use PVE::Storage::QuantaStorPlugin;
 use PVE::Storage::GlusterfsPlugin;
 use PVE::Storage::ZFSPoolPlugin;
 use PVE::Storage::ZFSPlugin;
 use PVE::Storage::PBSPlugin;
 use PVE::Storage::BTRFSPlugin;
 use PVE::Storage::ESXiPlugin;
+
 
 # Storage API version. Increment it on changes in storage API interface.
 use constant APIVER => 10;
@@ -50,6 +52,7 @@ use constant APIAGE => 1;
 
 our $KNOWN_EXPORT_FORMATS = ['raw+size', 'tar+size', 'qcow2+size', 'vmdk+size', 'zfs', 'btrfs'];
 
+PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - registering plugins");
 # load standard plugins
 PVE::Storage::DirPlugin->register();
 PVE::Storage::LVMPlugin->register();
@@ -60,6 +63,7 @@ PVE::Storage::ISCSIPlugin->register();
 PVE::Storage::RBDPlugin->register();
 PVE::Storage::CephFSPlugin->register();
 PVE::Storage::ISCSIDirectPlugin->register();
+PVE::Storage::QuantaStorPlugin->register();
 PVE::Storage::GlusterfsPlugin->register();
 PVE::Storage::ZFSPoolPlugin->register();
 PVE::Storage::ZFSPlugin->register();
@@ -120,16 +124,19 @@ our $vztmpl_extension_re = $VZTMPL_EXT_RE_1;
 #  PVE::Storage utility functions
 
 sub config {
+    # PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - config");
     return cfs_read_file("storage.cfg");
 }
 
 sub write_config {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - write_config");
     my ($cfg) = @_;
 
     cfs_write_file('storage.cfg', $cfg);
 }
 
 sub lock_storage_config {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - lock_storage_config");
     my ($code, $errmsg) = @_;
 
     cfs_lock_file("storage.cfg", undef, $code);
@@ -141,6 +148,7 @@ sub lock_storage_config {
 
 # FIXME remove maxfiles for PVE 8.0 or PVE 9.0
 my $convert_maxfiles_to_prune_backups = sub {
+    # PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - convert_maxfiles_to_prune_backups");
     my ($scfg) = @_;
 
     return if !$scfg;
@@ -162,6 +170,7 @@ my $convert_maxfiles_to_prune_backups = sub {
 };
 
 sub storage_config {
+    # PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage_config");
     my ($cfg, $storeid, $noerr) = @_;
 
     die "no storage ID specified\n" if !$storeid;
@@ -176,6 +185,7 @@ sub storage_config {
 }
 
 sub storage_check_node {
+    # PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage_check_node");
     my ($cfg, $storeid, $node, $noerr) = @_;
 
     my $scfg = storage_config($cfg, $storeid);
@@ -192,6 +202,7 @@ sub storage_check_node {
 }
 
 sub storage_check_enabled {
+    # PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage_check_enabled");
     my ($cfg, $storeid, $node, $noerr) = @_;
 
     my $scfg = storage_config($cfg, $storeid);
@@ -208,6 +219,7 @@ sub storage_check_enabled {
 # return true if storage supports replication
 # (volumes allocated with vdisk_alloc() has replication feature)
 sub storage_can_replicate {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage_can_replicate");
     my ($cfg, $storeid, $format) = @_;
 
     my $scfg = storage_config($cfg, $storeid);
@@ -216,6 +228,7 @@ sub storage_can_replicate {
 }
 
 sub get_max_protected_backups {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - get_max_protected_backups");
     my ($scfg, $storeid) = @_;
 
     return $scfg->{'max-protected-backups'} if defined($scfg->{'max-protected-backups'});
@@ -227,18 +240,21 @@ sub get_max_protected_backups {
 }
 
 sub storage_ids {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage_ids");
     my ($cfg) = @_;
 
     return keys %{$cfg->{ids}};
 }
 
 sub file_size_info {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - file_size_info");
     my ($filename, $timeout) = @_;
 
     return PVE::Storage::Plugin::file_size_info($filename, $timeout);
 }
 
 sub get_volume_attribute {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - get_volume_attribute");
     my ($cfg, $volid, $attribute) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -249,6 +265,7 @@ sub get_volume_attribute {
 }
 
 sub update_volume_attribute {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - update_volume_attribute");
     my ($cfg, $volid, $attribute, $value) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -283,6 +300,7 @@ sub update_volume_attribute {
 }
 
 sub volume_size_info {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_size_info");
     my ($cfg, $volid, $timeout) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid, 1);
@@ -298,6 +316,7 @@ sub volume_size_info {
 }
 
 sub volume_resize {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_resize");
     my ($cfg, $volid, $size, $running) = @_;
 
     my $padding = (1024 - $size % 1024) % 1024;
@@ -316,6 +335,7 @@ sub volume_resize {
 }
 
 sub volume_rollback_is_possible {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_rollback_is_possible");
     my ($cfg, $volid, $snap, $blockers) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid, 1);
@@ -331,6 +351,7 @@ sub volume_rollback_is_possible {
 }
 
 sub volume_snapshot {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_snapshot");
     my ($cfg, $volid, $snap) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid, 1);
@@ -346,6 +367,7 @@ sub volume_snapshot {
 }
 
 sub volume_snapshot_rollback {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_snapshot_rollback");
     my ($cfg, $volid, $snap) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid, 1);
@@ -363,6 +385,7 @@ sub volume_snapshot_rollback {
 
 # FIXME PVE 8.x remove $running parameter (needs APIAGE reset)
 sub volume_snapshot_delete {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_snapshot_delete");
     my ($cfg, $volid, $snap, $running) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid, 1);
@@ -381,6 +404,7 @@ sub volume_snapshot_delete {
 # consistency (see fsfreeze(8)) before a snapshot is taken - needed for
 # container mountpoints
 sub volume_snapshot_needs_fsfreeze {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_snapshot_needs_fsfreeze");
     my ($cfg, $volid) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -406,6 +430,7 @@ sub volume_snapshot_needs_fsfreeze {
 #                                format of $volid is always considered valid and if
 #                                no list is specified, all formats are considered valid.
 sub volume_has_feature {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_has_feature");
     my ($cfg, $feature, $volid, $snap, $running, $opts) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid, 1);
@@ -421,6 +446,7 @@ sub volume_has_feature {
 }
 
 sub volume_snapshot_info {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_snapshot_info");
     my ($cfg, $volid) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -430,6 +456,7 @@ sub volume_snapshot_info {
 }
 
 sub get_image_dir {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - get_image_dir");
     my ($cfg, $storeid, $vmid) = @_;
 
     my $scfg = storage_config($cfg, $storeid);
@@ -441,6 +468,7 @@ sub get_image_dir {
 }
 
 sub get_private_dir {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - get_private_dir");
     my ($cfg, $storeid, $vmid) = @_;
 
     my $scfg = storage_config($cfg, $storeid);
@@ -452,6 +480,7 @@ sub get_private_dir {
 }
 
 sub get_iso_dir {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - get_iso_dir");
     my ($cfg, $storeid) = @_;
 
     my $scfg = storage_config($cfg, $storeid);
@@ -461,6 +490,7 @@ sub get_iso_dir {
 }
 
 sub get_vztmpl_dir {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storeid");
     my ($cfg, $storeid) = @_;
 
     my $scfg = storage_config($cfg, $storeid);
@@ -470,6 +500,7 @@ sub get_vztmpl_dir {
 }
 
 sub get_backup_dir {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - get_backup_dir");
     my ($cfg, $storeid) = @_;
 
     my $scfg = storage_config($cfg, $storeid);
@@ -481,6 +512,7 @@ sub get_backup_dir {
 # library implementation
 
 sub parse_vmid {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - parse_vmid");
     my $vmid = shift;
 
     die "VMID '$vmid' contains illegal characters\n" if $vmid !~ m/^\d+$/;
@@ -492,6 +524,7 @@ sub parse_vmid {
 # clone -> base reference is not encoded in the volume ID.
 # see note in PVE::Storage::LvmThinPlugin for details.
 sub parse_volname {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - parse_volname");
     my ($cfg, $volid) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -506,6 +539,7 @@ sub parse_volname {
 }
 
 sub parse_volume_id {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - parse_volume_id");
     my ($volid, $noerr) = @_;
 
     return PVE::Storage::Plugin::parse_volume_id($volid, $noerr);
@@ -513,6 +547,7 @@ sub parse_volume_id {
 
 # test if we have read access to volid
 sub check_volume_access {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - check_volume_access");
     my ($rpcenv, $user, $cfg, $vmid, $volid, $type) = @_;
 
     my ($sid, $volname) = parse_volume_id($volid, 1);
@@ -551,6 +586,7 @@ sub check_volume_access {
 # reference is not encoded in the volume ID.
 # see note in PVE::Storage::LvmThinPlugin for details.
 sub volume_is_base_and_used {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_is_base_and_used");
     my ($cfg, $volid) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -582,6 +618,7 @@ sub volume_is_base_and_used {
 
 # try to map a filesystem path to a volume identifier
 sub path_to_volume_id {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - path_to_volume_id");
     my ($cfg, $path) = @_;
 
     my $ids = $cfg->{ids};
@@ -648,6 +685,7 @@ sub path_to_volume_id {
 }
 
 sub path {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - path");
     my ($cfg, $volid, $snapname) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -660,6 +698,7 @@ sub path {
 }
 
 sub abs_filesystem_path {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - abs_filesystem_path");
     my ($cfg, $volid, $allow_blockdev) = @_;
 
     my $path;
@@ -682,6 +721,7 @@ sub abs_filesystem_path {
 
 # used as last resort to adapt volnames when migrating
 my $volname_for_storage = sub {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volname_for_storage");
     my ($cfg, $storeid, $name, $vmid, $format) = @_;
 
     my $scfg = storage_config($cfg, $storeid);
@@ -702,6 +742,7 @@ my $volname_for_storage = sub {
 
 # whether a migration snapshot is needed for a given storage
 sub storage_migrate_snapshot {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage_migrate_snapshot");
     my ($cfg, $storeid, $existing_snapshots) = @_;
     my $scfg = storage_config($cfg, $storeid);
 
@@ -709,6 +750,7 @@ sub storage_migrate_snapshot {
 }
 
 my $volume_import_prepare = sub {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_import_prepare");
     my ($volid, $format, $path, $apiver, $opts) = @_;
 
     my $base_snapshot = $opts->{base_snapshot};
@@ -735,6 +777,7 @@ my $volume_import_prepare = sub {
 };
 
 my $volume_export_prepare = sub {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_export_prepare");
     my ($cfg, $volid, $format, $logfunc, $opts) = @_;
     my $base_snapshot = $opts->{base_snapshot};
     my $snapshot = $opts->{snapshot};
@@ -768,6 +811,7 @@ my $volume_export_prepare = sub {
 };
 
 sub storage_migrate {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage_migrate");
     my ($cfg, $volid, $target_sshinfo, $target_storeid, $opts, $logfunc) = @_;
 
     my $insecure = $opts->{insecure};
@@ -926,6 +970,7 @@ sub storage_migrate {
 }
 
 sub vdisk_clone {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - vdisk_clone");
     my ($cfg, $volid, $vmid, $snap) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -944,6 +989,7 @@ sub vdisk_clone {
 }
 
 sub vdisk_create_base {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - vdisk_create_base");
     my ($cfg, $volid) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -962,6 +1008,7 @@ sub vdisk_create_base {
 }
 
 sub map_volume {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - map_volume");
     my ($cfg, $volid, $snapname) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -974,6 +1021,7 @@ sub map_volume {
 }
 
 sub unmap_volume {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - unmap_volume");
     my ($cfg, $volid, $snapname) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -986,6 +1034,7 @@ sub unmap_volume {
 }
 
 sub vdisk_alloc {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - vdisk_alloc");
     my ($cfg, $storeid, $vmid, $fmt, $name, $size) = @_;
 
     die "no storage ID specified\n" if !$storeid;
@@ -1018,6 +1067,7 @@ sub vdisk_alloc {
 }
 
 sub vdisk_free {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - vdisk_free");
     my ($cfg, $volid) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -1048,6 +1098,7 @@ sub vdisk_free {
 }
 
 sub vdisk_list {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - vdisk_list");
     my ($cfg, $storeid, $vmid, $vollist, $ctype) = @_;
 
     my $ids = $cfg->{ids};
@@ -1094,6 +1145,7 @@ sub vdisk_list {
 }
 
 sub template_list {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - template_list");
     my ($cfg, $storeid, $tt) = @_;
 
     die "unknown template type '$tt'\n"
@@ -1123,6 +1175,7 @@ sub template_list {
 }
 
 sub volume_list {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_list");
     my ($cfg, $storeid, $vmid, $content) = @_;
 
     my @ctypes = qw(rootdir images vztmpl iso backup snippets import);
@@ -1145,7 +1198,7 @@ sub volume_list {
 }
 
 sub uevent_seqnum {
-
+    # PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - uevent_seqnum");
     my $filename = "/sys/kernel/uevent_seqnum";
 
     my $seqnum = 0;
@@ -1160,6 +1213,7 @@ sub uevent_seqnum {
 }
 
 sub activate_storage {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - activate_storage");
     my ($cfg, $storeid, $cache) = @_;
 
     $cache = {} if !$cache;
@@ -1196,6 +1250,7 @@ sub activate_storage {
 }
 
 sub activate_storage_list {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - activate_storage_list");
     my ($cfg, $storeid_list, $cache) = @_;
 
     $cache = {} if !$cache;
@@ -1206,6 +1261,7 @@ sub activate_storage_list {
 }
 
 sub deactivate_storage {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - deactivate_storage");
     my ($cfg, $storeid) = @_;
 
     my $scfg = storage_config ($cfg, $storeid);
@@ -1216,6 +1272,7 @@ sub deactivate_storage {
 }
 
 sub activate_volumes {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - activate_volumes");
     my ($cfg, $vollist, $snapname) = @_;
 
     return if !($vollist && scalar(@$vollist));
@@ -1239,6 +1296,7 @@ sub activate_volumes {
 }
 
 sub deactivate_volumes {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - deactivate_volumes");
     my ($cfg, $vollist, $snapname) = @_;
 
     return if !($vollist && scalar(@$vollist));
@@ -1266,6 +1324,7 @@ sub deactivate_volumes {
 }
 
 sub storage_info {
+    # PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage_info");
     my ($cfg, $content, $includeformat) = @_;
 
     my $ids = $cfg->{ids};
@@ -1341,6 +1400,7 @@ sub storage_info {
 }
 
 sub resolv_server {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - resolv_server");
     my ($server) = @_;
 
     my ($packed_ip, $family);
@@ -1356,6 +1416,7 @@ sub resolv_server {
 }
 
 sub scan_nfs {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - scan_nfs");
     my ($server_in) = @_;
 
     my $server;
@@ -1379,6 +1440,7 @@ sub scan_nfs {
 }
 
 sub scan_cifs {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - scan_cifs");
     my ($server_in, $user, $password, $domain) = @_;
 
     my $server = resolv_server($server_in);
@@ -1417,7 +1479,7 @@ sub scan_cifs {
 }
 
 sub scan_zfs {
-
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - scan_zfs");
     my $cmd = ['zfs',  'list', '-t', 'filesystem', '-Hp', '-o', 'name,avail,used'];
 
     my $res = [];
@@ -1439,6 +1501,7 @@ sub scan_zfs {
 }
 
 sub resolv_portal {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - resolv_portal");
     my ($portal, $noerr) = @_;
 
     my ($server, $port) = PVE::Tools::parse_host_and_port($portal);
@@ -1456,6 +1519,7 @@ sub resolv_portal {
 
 
 sub scan_iscsi {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - scan_iscsi");
     my ($portal_in) = @_;
 
     my $portal;
@@ -1467,6 +1531,7 @@ sub scan_iscsi {
 }
 
 sub storage_default_format {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage_default_format");
     my ($cfg, $storeid) = @_;
 
     my $scfg = storage_config ($cfg, $storeid);
@@ -1475,6 +1540,7 @@ sub storage_default_format {
 }
 
 sub vgroup_is_used {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - vgroup_is_used");
     my ($cfg, $vgname) = @_;
 
     foreach my $storeid (keys %{$cfg->{ids}}) {
@@ -1488,6 +1554,7 @@ sub vgroup_is_used {
 }
 
 sub target_is_used {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - target_is_used");
     my ($cfg, $target) = @_;
 
     foreach my $storeid (keys %{$cfg->{ids}}) {
@@ -1501,6 +1568,7 @@ sub target_is_used {
 }
 
 sub volume_is_used {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_is_used");
     my ($cfg, $volid) = @_;
 
     foreach my $storeid (keys %{$cfg->{ids}}) {
@@ -1514,6 +1582,7 @@ sub volume_is_used {
 }
 
 sub storage_is_used {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage_is_used");
     my ($cfg, $storeid) = @_;
 
     foreach my $sid (keys %{$cfg->{ids}}) {
@@ -1527,6 +1596,7 @@ sub storage_is_used {
 }
 
 sub foreach_volid {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - foreach_volid");
     my ($list, $func) = @_;
 
     return if !$list;
@@ -1545,6 +1615,7 @@ sub foreach_volid {
 }
 
 sub decompressor_info {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - decompressor_info");
     my ($format, $comp) = @_;
 
     if ($format eq 'tgz' && !defined($comp)) {
@@ -1585,12 +1656,14 @@ sub decompressor_info {
 }
 
 sub protection_file_path {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - protection_file_path");
     my ($path) = @_;
 
     return "${path}.protected";
 }
 
 sub archive_info {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - archive_info");
     my ($archive) = shift;
     my $info;
 
@@ -1620,6 +1693,7 @@ sub archive_info {
 }
 
 sub archive_remove {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - archive_remove");
     my ($archive_path) = @_;
 
     die "cannot remove protected archive '$archive_path'\n"
@@ -1631,6 +1705,7 @@ sub archive_remove {
 }
 
 sub archive_auxiliaries_remove {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - archive_auxiliaries_remove");
     my ($archive_path) = @_;
 
     my $dirname = dirname($archive_path);
@@ -1647,6 +1722,7 @@ sub archive_auxiliaries_remove {
 }
 
 sub extract_vzdump_config_tar {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - extract_vzdump_config_tar");
     my ($archive, $conf_re) = @_;
 
     die "ERROR: file '$archive' does not exist\n" if ! -f $archive;
@@ -1681,6 +1757,7 @@ sub extract_vzdump_config_tar {
 }
 
 sub extract_vzdump_config_vma {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - extract_vzdump_config_vma");
     my ($archive, $comp) = @_;
 
     my $raw = '';
@@ -1723,6 +1800,7 @@ sub extract_vzdump_config_vma {
 }
 
 sub extract_vzdump_config {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - extract_vzdump_config");
     my ($cfg, $volid) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);
@@ -1754,6 +1832,7 @@ sub extract_vzdump_config {
 }
 
 sub prune_backups {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - prune_backups");
     my ($cfg, $storeid, $keep, $vmid, $type, $dryrun, $logfunc) = @_;
 
     my $scfg = storage_config($cfg, $storeid);
@@ -1772,6 +1851,7 @@ sub prune_backups {
 }
 
 my $prune_mark = sub {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - prune_mark");
     my ($prune_entries, $keep_count, $id_func) = @_;
 
     return if !$keep_count;
@@ -1802,6 +1882,7 @@ my $prune_mark = sub {
 };
 
 sub prune_mark_backup_group {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - prune_mark_backup_group");
     my ($backup_group, $keep) = @_;
 
     my @positive_opts = grep { $_ ne 'keep-all' && $keep->{$_} > 0 } keys $keep->%*;
@@ -1855,6 +1936,7 @@ sub prune_mark_backup_group {
 }
 
 sub volume_export : prototype($$$$$$$) {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_export");
     my ($cfg, $fh, $volid, $format, $snapshot, $base_snapshot, $with_snapshots) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid, 1);
@@ -1866,6 +1948,7 @@ sub volume_export : prototype($$$$$$$) {
 }
 
 sub volume_import : prototype($$$$$$$$) {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_import");
     my ($cfg, $fh, $volid, $format, $snapshot, $base_snapshot, $with_snapshots, $allow_rename) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid, 1);
@@ -1886,6 +1969,7 @@ sub volume_import : prototype($$$$$$$$) {
 }
 
 sub volume_export_formats : prototype($$$$$) {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_export_formats");
     my ($cfg, $volid, $snapshot, $base_snapshot, $with_snapshots) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid, 1);
@@ -1898,6 +1982,7 @@ sub volume_export_formats : prototype($$$$$) {
 }
 
 sub volume_import_formats : prototype($$$$$) {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_import_formats");
     my ($cfg, $volid, $snapshot, $base_snapshot, $with_snapshots) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid, 1);
@@ -1915,6 +2000,7 @@ sub volume_import_formats : prototype($$$$$) {
 }
 
 sub volume_transfer_formats {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_transfer_formats");
     my ($cfg, $src_volid, $dst_volid, $snapshot, $base_snapshot, $with_snapshots) = @_;
     my @export_formats = volume_export_formats($cfg, $src_volid, $snapshot, $base_snapshot, $with_snapshots);
     my @import_formats = volume_import_formats($cfg, $dst_volid, $snapshot, $base_snapshot, $with_snapshots);
@@ -1924,6 +2010,7 @@ sub volume_transfer_formats {
 }
 
 sub volume_imported_message {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_imported_message");
     my ($volid, $want_pattern) = @_;
 
     if ($want_pattern) {
@@ -1940,6 +2027,7 @@ sub volume_imported_message {
 # - export_formats: used to select common transport format
 # - unix: unix socket path
 sub volume_import_start {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_import_start");
     my ($cfg, $storeid, $volname, $format, $vmid, $opts) = @_;
 
     my $with_snapshots = $opts->{'with_snapshots'} ? 1 : 0;
@@ -1985,6 +2073,7 @@ sub volume_import_start {
 }
 
 sub volume_export_start {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volume_export_start");
     my ($cfg, $volid, $format, $log, $opts) = @_;
 
     my $known_format = [ grep { $_ eq $format } $KNOWN_EXPORT_FORMATS->@* ];
@@ -2003,6 +2092,7 @@ sub volume_export_start {
 # bash completion helper
 
 sub complete_storage {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - complete_storage");
     my ($cmdname, $pname, $cvalue) = @_;
 
     my $cfg = PVE::Storage::config();
@@ -2011,6 +2101,7 @@ sub complete_storage {
 }
 
 sub complete_storage_enabled {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - complete_storage_enabled");
     my ($cmdname, $pname, $cvalue) = @_;
 
     my $res = [];
@@ -2024,12 +2115,14 @@ sub complete_storage_enabled {
 }
 
 sub complete_content_type {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - complete_content_type");
     my ($cmdname, $pname, $cvalue) = @_;
 
     return [qw(rootdir images vztmpl iso backup snippets)];
 }
 
 sub complete_volume {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - complete_volume");
     my ($cmdname, $pname, $cvalue) = @_;
 
     my $cfg = config();
@@ -2064,6 +2157,7 @@ sub complete_volume {
 }
 
 sub rename_volume {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - rename_volume");
     my ($cfg, $source_volid, $target_vmid, $target_volname) = @_;
 
     die "no source volid provided\n" if !$source_volid;
@@ -2089,6 +2183,7 @@ sub rename_volume {
 # B, we should take the smaller limit defined for storages A and B, and if no
 # such limit was specified, use the one from datacenter.cfg.
 sub get_bandwidth_limit {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - get_bandwidth_limit");
     my ($operation, $storage_list, $override) = @_;
 
     # called for each limit (global, per-storage) with the 'default' and the
@@ -2161,6 +2256,7 @@ sub get_bandwidth_limit {
 
 # checks if the storage id is available and dies if not
 sub assert_sid_unused {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - assert_sid_unused");
     my ($sid) = @_;
 
     my $cfg = config();
@@ -2174,6 +2270,7 @@ sub assert_sid_unused {
 # removes leading/trailing spaces and (back)slashes completely
 # substitutes every non-ASCII-alphanumerical char with '_', except '_.-'
 sub normalize_content_filename {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - normalize_content_filename");
     my ($filename) = @_;
 
     chomp $filename;
@@ -2186,6 +2283,7 @@ sub normalize_content_filename {
 # If a storage provides an 'import' content type, it should be able to provide
 # an object implementing the import information interface.
 sub get_import_metadata {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - get_import_metadata");
     my ($cfg, $volid) = @_;
 
     my ($storeid, $volname) = parse_volume_id($volid);

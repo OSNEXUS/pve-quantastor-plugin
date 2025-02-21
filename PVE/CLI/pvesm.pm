@@ -23,6 +23,7 @@ use PVE::API2::Storage::Content;
 use PVE::API2::Storage::PruneBackups;
 use PVE::API2::Storage::Scan;
 use PVE::API2::Storage::Status;
+use PVE::Storage::QuantaStorPlugin;
 use PVE::JSONSchema qw(get_standard_option);
 use PVE::PTY;
 
@@ -33,6 +34,7 @@ use base qw(PVE::CLIHandler);
 my $nodename = PVE::INotify::nodename();
 
 sub param_mapping {
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - param_mapping");
     my ($name) = @_;
 
     my $password_map = PVE::CLIHandler::get_standard_mapping('pve-password', {
@@ -82,9 +84,12 @@ sub param_mapping {
 }
 
 sub setup_environment {
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - setup_environment");
     PVE::RPCEnvironment->setup_default_cli_env();
 }
 
+
+PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - register_method - apiinfo");
 __PACKAGE__->register_method ({
     name => 'apiinfo',
     path => 'apiinfo',
@@ -109,6 +114,7 @@ __PACKAGE__->register_method ({
     }
 });
 
+PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - register_method - path");
 __PACKAGE__->register_method ({
     name => 'path',
     path => 'path',
@@ -139,6 +145,7 @@ __PACKAGE__->register_method ({
 
     }});
 
+PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - register_method - extractconfig");
 __PACKAGE__->register_method ({
     name => 'extractconfig',
     path => 'extractconfig',
@@ -189,6 +196,7 @@ __PACKAGE__->register_method ({
     }});
 
 my $print_content = sub {
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - print_content");
     my ($list) = @_;
 
     my ($maxlenname, $maxsize) = (0, 0);
@@ -219,6 +227,7 @@ my $print_content = sub {
 };
 
 my $print_status = sub {
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - print_status");
     my $res = shift;
 
     my $maxlen = 0;
@@ -250,6 +259,7 @@ my $print_status = sub {
     }
 };
 
+PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - register_method - export");
 __PACKAGE__->register_method ({
     name => 'export',
     path => 'export',
@@ -315,7 +325,10 @@ __PACKAGE__->register_method ({
 
 	my $outfh;
 	if ($filename eq '-') {
-	    $outfh = \*STDOUT;
+	    # No other messages must go to STDOUT if it's used for the export stream!
+	    open($outfh, '>&', STDOUT) or die "unable to dup() STDOUT - $!\n";
+	    close(STDOUT);
+	    open(STDOUT, '>', '/dev/null');
 	} else {
 	    sysopen($outfh, $filename, O_CREAT|O_WRONLY|O_TRUNC)
 		or die "open($filename): $!\n";
@@ -336,6 +349,7 @@ __PACKAGE__->register_method ({
     }
 });
 
+PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - register_method - import");
 __PACKAGE__->register_method ({
     name => 'import',
     path => 'import',
@@ -480,6 +494,7 @@ __PACKAGE__->register_method ({
     }
 });
 
+PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - register_method - prunebackups");
 __PACKAGE__->register_method ({
     name => 'prunebackups',
     path => 'prunebackups',
@@ -579,10 +594,12 @@ __PACKAGE__->register_method ({
     }});
 
 my $print_api_result = sub {
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - print_api_result");
     my ($data, $schema, $options) = @_;
     PVE::CLIFormatter::print_api_result($data, $schema, undef, $options);
 };
 
+PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - Setting command defs");
 our $cmddef = {
     add => [ "PVE::API2::Storage::Config", 'create', ['type', 'storage'] ],
     set => [ "PVE::API2::Storage::Config", 'update', ['storage'] ],
@@ -642,6 +659,18 @@ our $cmddef = {
 		printf "%-${maxlen}s %s\n", $rec->{target}, $rec->{portal};
 	    }
 	}],
+	quantastor => [ "PVE::API2::Storage::Scan", 'quantastorscan', ['server', 'username'], { node => $nodename }, sub  {
+	    my $res = shift;
+
+	    my $maxlen = 0;
+	    foreach my $rec (@$res) {
+		my $len = length ($rec->{target});
+		$maxlen = $len if $len > $maxlen;
+	    }
+	    foreach my $rec (@$res) {
+		printf "%-${maxlen}s %s\n", $rec->{target}, $rec->{portal};
+	    }
+	}],
 	lvm => [ "PVE::API2::Storage::Scan", 'lvmscan', [], { node => $nodename }, sub  {
 	    my $res = shift;
 	    foreach my $rec (@$res) {
@@ -674,6 +703,7 @@ our $cmddef = {
     cifsscan => { alias => 'scan cifs' },
     glusterfsscan => { alias => 'scan glusterfs' },
     iscsiscan => { alias => 'scan iscsi' },
+	quantastorscan => { alias => 'scan quantastor'},
     lvmscan => { alias => 'scan lvm' },
     lvmthinscan => { alias => 'scan lvmthin' },
     zfsscan => { alias => 'scan zfs' },
@@ -727,5 +757,7 @@ our $cmddef = {
 	}
     }],
 };
+
+PVE::Storage::QuantaStorPlugin::qs_write_to_log("========== done pvesm ==============");
 
 1;

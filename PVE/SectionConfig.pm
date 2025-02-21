@@ -10,6 +10,8 @@ use PVE::Exception qw(raise_param_exc);
 use PVE::JSONSchema qw(get_standard_option);
 use PVE::Tools;
 
+use PVE::Storage::QuantaStorPlugin;
+
 # This package provides a way to have multiple (often similar) types of entries
 # in the same config file, each in its own section, thus "Section Config".
 #
@@ -644,6 +646,7 @@ sub parse_config {
 
 sub check_config {
     my ($class, $sectionId, $config, $create, $skipSchemaCheck) = @_;
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("SectionConfig.pm - check_config");
 
     my $type = $class->type();
     my $pdata = $class->private();
@@ -653,6 +656,8 @@ sub check_config {
 
     foreach my $k (keys %$config) {
 	my $value = $config->{$k};
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("SectionConfig.pm - key ".$k." value ".$value);
+
 
 	die "can't change value of fixed parameter '$k'\n"
 	    if !$create && defined($opts->{$k}) && $opts->{$k}->{fixed};

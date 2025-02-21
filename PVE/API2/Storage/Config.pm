@@ -10,6 +10,7 @@ use PVE::Storage;
 use PVE::Storage::Plugin;
 use PVE::Storage::LVMPlugin;
 use PVE::Storage::CIFSPlugin;
+use PVE::Storage::QuantaStorPlugin;
 use HTTP::Status qw(:constants);
 use Storable qw(dclone);
 use PVE::JSONSchema qw(get_standard_option);
@@ -24,6 +25,7 @@ my @ctypes = qw(images vztmpl iso backup);
 my $storage_type_enum = PVE::Storage::Plugin->lookup_types();
 
 my $api_storage_config = sub {
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("Config.pm - api_storage_config");
     my ($cfg, $storeid) = @_;
 
     my $scfg = dclone(PVE::Storage::storage_config($cfg, $storeid));
@@ -41,6 +43,7 @@ my $api_storage_config = sub {
 # For storages that $match->($scfg), update node restrictions to not include $node anymore and
 # in case no node remains, remove the storage altogether.
 sub cleanup_storages_for_node {
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("Config.pm - cleanup_storages_for_node");
     my ($self, $match, $node) = @_;
 
     my $config = PVE::Storage::config();
@@ -74,6 +77,7 @@ sub cleanup_storages_for_node {
 # Set the dryrun parameter, to only verify the parameters without updating or
 # creating the storage.
 sub create_or_update {
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("Config.pm - create_or_update");
     my ($self, $sid, $node, $storage_params, $verify_params, $dryrun) = @_;
 
     my $cfg = PVE::Storage::config();
@@ -192,6 +196,7 @@ __PACKAGE__->register_method ({
 
 my $sensitive_params = [qw(password encryption-key master-pubkey keyring)];
 
+# register create storage config method
 __PACKAGE__->register_method ({
     name => 'create',
     protected => 1,
@@ -230,6 +235,7 @@ __PACKAGE__->register_method ({
 	},
     },
     code => sub {
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("Config.pm - create methode code");
 	my ($param) = @_;
 
 	my $type = extract_param($param, 'type');
