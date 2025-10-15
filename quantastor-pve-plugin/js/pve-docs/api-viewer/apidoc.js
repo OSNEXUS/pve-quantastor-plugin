@@ -50771,6 +50771,31 @@ const apiSchema = [
                            "type" : "string",
                            "typetext" : "<string>"
                         },
+                        "qs_user" : {
+                           "description" : "QuantaStor user for API access",
+                           "optional" : 1,
+                           "type" : "string",
+                           "typetext" : "<string>"
+                        },
+                        "qs_password" : {
+                           "description" : "QuantaStor password for API access",
+                           "optional" : 1,
+                           "type" : "string",
+                           "typetext" : "<string>"
+                        },
+                        "qs_use_ssl" : {
+                           "description" : "QuantaStor API access via SSL",
+                           "optional" : 1,
+                           "type" : "boolean",
+                           "typetext" : "<boolean>"
+                        },
+                        "qs_apiv4_host" : {
+                           "description" : "QuantaStor API Host via IPv4",
+                           "format" : "address",
+                           "optional" : 1,
+                           "type" : "string",
+                           "typetext" : "<string>"
+                        },
                         "content" : {
                            "description" : "Allowed content types.\n\nNOTE: the value 'rootdir' is used for Containers, and value 'images' for VMs.\n",
                            "format" : "pve-storage-content-list",
@@ -51297,6 +51322,31 @@ const apiSchema = [
                   },
                   "comstar_tg" : {
                      "description" : "target group for comstar views",
+                     "optional" : 1,
+                     "type" : "string",
+                     "typetext" : "<string>"
+                  },
+                  "qs_user" : {
+                     "description" : "QuantaStor user for API access",
+                     "optional" : 1,
+                     "type" : "string",
+                     "typetext" : "<string>"
+                  },
+                  "qs_password" : {
+                     "description" : "QuantaStor password for API access",
+                     "optional" : 1,
+                     "type" : "string",
+                     "typetext" : "<string>"
+                  },
+                  "qs_use_ssl" : {
+                     "description" : "QuantaStor API access via SSL",
+                     "optional" : 1,
+                     "type" : "boolean",
+                     "typetext" : "<boolean>"
+                  },
+                  "qs_apiv4_host" : {
+                     "description" : "QuantaStor API Host via IPv4",
+                     "format" : "address",
                      "optional" : 1,
                      "type" : "string",
                      "typetext" : "<string>"

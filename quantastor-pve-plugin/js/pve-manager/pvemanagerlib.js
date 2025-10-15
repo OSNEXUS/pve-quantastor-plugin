@@ -9332,6 +9332,7 @@ Ext.define('PVE.form.iScsiProviderSelector', {
     alias: ['widget.pveiScsiProviderSelector'],
     comboItems: [
 	['comstar', 'Comstar'],
+	['quantastor', 'QuantaStor-API'],
 	['istgt', 'istgt'],
 	['iet', 'IET'],
 	['LIO', 'LIO'],
@@ -60054,6 +60055,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 	data: {
 	    isLIO: false,
 	    isComstar: true,
+		isQuantaStor: false,
 	    hasWriteCacheOption: true,
 	},
     },
@@ -60066,10 +60068,19 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 	    },
 	},
 	changeISCSIProvider: function(f, newVal, oldVal) {
+		var me = this;
 	    var vm = this.getViewModel();
 	    vm.set('isLIO', newVal === 'LIO');
 	    vm.set('isComstar', newVal === 'comstar');
-	    vm.set('hasWriteCacheOption', newVal === 'comstar' || newVal === 'istgt');
+		vm.set('isQuantaStor', newVal === "quantastor");
+		vm.set('hasWriteCacheOption', newVal === 'comstar' || newVal === 'quantastor' || newVal === 'istgt')
+		if (newVal !== 'quantastor') {
+			me.lookupReference('qs_use_ssl_field').setValue(false);
+			me.lookupReference('qs_apiv4_host_field').setValue('');
+			me.lookupReference('qs_user_field').setValue('');
+			me.lookupReference('qs_password_field').setValue('');
+			me.lookupReference('qs_confirmpw_field').setValue('');
+		}
 	},
     },
 
@@ -60087,6 +60098,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
     },
 
     setValues: function(values) {
+	values.qs_confirmpw = values.qs_password;
 	values.writecache = values.nowritecache ? 0 : 1;
 	this.callParent([values]);
     },
@@ -60103,7 +60115,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 		allowBlank: false,
 	    },
 	    {
-		xtype: me.isCreate ? 'textfield' : 'displayfield',
+		xtype: 'textfield',
 		name: 'pool',
 		value: '',
 		fieldLabel: gettext('Pool'),
@@ -60117,7 +60129,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 		allowBlank: false,
 	    },
 	    {
-		xtype: me.isCreate ? 'textfield' : 'displayfield',
+		xtype: 'textfield',
 		name: 'target',
 		value: '',
 		fieldLabel: gettext('Target'),
@@ -60128,9 +60140,29 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 		name: 'comstar_tg',
 		value: '',
 		fieldLabel: gettext('Target group'),
-		bind: me.isCreate ? { disabled: '{!isComstar}' } : { hidden: '{!isComstar}' },
+		bind: { hidden: '{!isComstar}' },
 		allowBlank: true,
 	    },
+	    {
+		xtype: 'proxmoxcheckbox',
+		name: 'qs_use_ssl',
+		reference: 'qs_use_ssl_field',
+		inputId: 'qs_use_ssl_field',
+		checked: false,
+		bind: { hidden: '{!isQuantaStor}' },
+		uncheckedValue: 0,
+		fieldLabel: gettext('API use SSL')
+	    },
+	    {
+		xtype: 'textfield',
+		name: 'qs_user',
+		reference: 'qs_user_field',
+		inputId: 'qs_user_field',
+		value: '',
+		allowBlank: false,
+		fieldLabel: gettext('API Username'),
+		bind: { hidden: '{!isQuantaStor}' },
+		}
 	];
 
 	me.column2 = [
@@ -60160,7 +60192,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 		xtype: me.isCreate ? 'textfield' : 'displayfield',
 		name: 'comstar_hg',
 		value: '',
-		bind: me.isCreate ? { disabled: '{!isComstar}' } : { hidden: '{!isComstar}' },
+		bind: { hidden: '{!isComstar}' },
 		fieldLabel: gettext('Host group'),
 		allowBlank: true,
 	    },
@@ -60168,9 +60200,60 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 		xtype: me.isCreate ? 'textfield' : 'displayfield',
 		name: 'lio_tpg',
 		value: '',
-		bind: me.isCreate ? { disabled: '{!isLIO}' } : { hidden: '{!isLIO}' },
-		allowBlank: false,
+		bind: { hidden: '{!isLIO}' },
 		fieldLabel: gettext('Target portal group'),
+		allowBlank: true
+	    },
+	    {
+		xtype: 'proxmoxtextfield',
+		name: 'qs_apiv4_host',
+		reference: 'qs_apiv4_host_field',
+		value: '',
+		editable: true,
+		allowBlank: true,
+		emptyText: Proxmox.Utils.noneText,
+		bind: { hidden: '{!isQuantaStor}' },
+		fieldLabel: gettext('API IPv4 Host'),
+		allowBlank: true
+	    },
+	    {
+		xtype: 'proxmoxtextfield',
+		name: 'qs_password',
+		reference: 'qs_password_field',
+		inputType: me.isCreate ? '' : 'password',
+		value: '',
+		editable: true,
+		deleteEmpty: true,
+		allowBlank: false,
+		emptyText: Proxmox.Utils.noneText,
+		bind: { hidden: '{!isQuantaStor}' },
+		fieldLabel: gettext('API Password'),
+		change: function(f, value) {
+		    if (f.rendered) {
+			f.up().down('field[name=qs_confirmpw]').validate();
+		    }
+		}
+	    },
+	    {
+		xtype: 'proxmoxtextfield',
+		name: 'qs_confirmpw',
+		reference: 'qs_confirmpw_field',
+		inputType: me.isCreate ? '' : 'password',
+		value: '',
+		editable: true,
+		deleteEmpty: true,
+		allowBlank: false,
+		submitValue: false,
+		emptyText: Proxmox.Utils.noneText,
+		bind: { hidden: '{!isQuantaStor}' },
+		fieldLabel: gettext('Confirm Password'),
+		validator: function(value) {
+		    var pw = this.up().down('field[name=qs_password]').getValue();
+		    if (pw !== value) {
+			return "Passwords do not match!";
+		    }
+		    return true;
+		}
 	    },
 	];
 
