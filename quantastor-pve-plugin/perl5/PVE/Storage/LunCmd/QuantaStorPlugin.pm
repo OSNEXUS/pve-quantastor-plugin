@@ -1,0 +1,991 @@
+package PVE::Storage::LunCmd::QuantaStorPlugin;
+
+use strict;
+use warnings;
+use Data::Dumper;
+use PVE::SafeSyslog;
+use IO::Socket::SSL;
+
+use PVE::Storage::QuantaStorPlugin;
+
+use LWP::UserAgent;
+use HTTP::Request;
+use MIME::Base64;
+use JSON;
+
+# Global variable definitions
+my $MAX_LUNS = 255;                        # Max LUNS per target on the iSCSI server
+my $qs_server_list = undef;           # API connection HashRef using the IP address of the server
+my $qs_rest_connection = undef;       # Pointer to entry in $qs_server_list
+my $qs_global_config_list = undef;    # IQN HashRef using the IP address of the server
+my $qs_global_config = undef;         # Pointer to entry in $qs_global_config_list
+my $dev_prefix = "";
+my $product_name = undef;
+my $apiping = '/api/v1.0/system/version/'; # Initial API method for setup
+my $runawayprevent = 0;                    # Recursion prevention variable
+
+# QuantaStor API definitions
+my $qs_api_version = "v1.0";          # Default to v1.0 of the API's
+my $qs_api_methods = undef;           # API Methods Nested HASH Ref
+my $qs_api_variables = undef;         # API Variable Nested HASH Ref
+my $truenas_version = undef;
+my $truenas_release_type = "Production";
+
+# QuantaStor API Versioning HashRef Matrix
+my $qs_api_version_matrix = {
+    "v1.0" => {
+        "methods" => {
+            "config"       => {
+                "resource" => "/api/v1.0/services/iscsi/globalconfiguration/",
+            },
+            "target"       => {
+                "resource" => "/api/v1.0/services/iscsi/target/",
+            },
+            "extent"       => {
+                "resource"  => "/api/v1.0/services/iscsi/extent/",
+                "post_body" => {
+                    "iscsi_target_extent_type" => "Disk",
+                    "iscsi_target_extent_name" => "\$name",
+                    "iscsi_target_extent_disk" => "\$device",
+                },
+            },
+            "targetextent" => {
+                "resource"  => "/api/v1.0/services/iscsi/targettoextent/",
+                "post_body" => {
+                    "iscsi_target" => "\$target_id",
+                    "iscsi_extent" => "\$extent_id",
+                    "iscsi_lunid" => "\$lun_id",
+                },
+            },
+        },
+        "variables" => {
+            "basename"     => "iscsi_basename",
+            "lunid"        => "iscsi_lunid",
+            "extentid"     => "iscsi_extent",
+            "targetid"     => "iscsi_target",
+            "extentpath"   => "iscsi_target_extent_path",
+            "extentnaa"    => "iscsi_target_extent_naa",
+            "targetname"   => "iscsi_target_name",
+        }
+    },
+    "v2.0" => {
+        "methods" => {
+            "config"       => {
+                "resource" => "/api/v2.0/iscsi/global",
+            },
+            "target"       => {
+                "resource" => "/api/v2.0/iscsi/target/",
+            },
+            "extent"       => {
+                "resource"    => "/api/v2.0/iscsi/extent/",
+                "delete_body" => {
+                    "remove" => \1,
+                    "force"  => \1,
+                },
+                "post_body"   => {
+                    "type"   => "DISK",
+                    "name"   => "\$name",
+                    "disk"   => "\$device",
+                },
+            },
+            "targetextent" => {
+                "resource"    => "/api/v2.0/iscsi/targetextent/",
+                "delete_body" => {
+                    "force"  => \1,
+                },
+                "post_body"   => {
+                    "target"  => "\$target_id",
+                    "extent"  => "\$extent_id",
+                    "lunid"   => "\$lun_id",
+                },
+            },
+        },
+        "variables" => {
+            "basename"     => "basename",
+            "lunid"        => "lunid",
+            "extentid"     => "extent",
+            "targetid"     => "target",
+            "extentpath"   => "path",
+            "extentnaa"    => "naa",
+            "targetname"   => "name",
+        },
+    },
+};
+
+
+#
+#
+#
+sub get_base {
+    return '/dev/zvol';
+}
+
+sub qs_api_call {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_api_call");
+    my ($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout) = @_;
+
+    # Set a default timeout if not provided
+    $timeout //= 300;
+
+    my $url = "https://$server_ip:8153/qstorapi/$api_name";
+
+    # Add query parameters to the URL if provided
+    if ($query_params && %$query_params) {
+        my $query_string = join '&',
+            map { uri_escape($_) . '=' . uri_escape($query_params->{$_}) }
+            grep { defined $query_params->{$_} && $query_params->{$_} ne '' }
+            keys %$query_params;
+
+        $url .= "?$query_string" if $query_string;
+    }
+
+    my $ua = LWP::UserAgent->new;
+
+    # Set the timeout
+    $ua->timeout($timeout);
+
+    # Configure SSL options
+    if ($cert_path) {
+        # Use the provided certificate for SSL verification
+        $ua->ssl_opts(
+            SSL_ca_file     => $cert_path, # Path to the CA certificate
+            verify_hostname => 1          # Enable hostname verification
+        );
+    } else {
+        # Disable SSL verification
+        $ua->ssl_opts(
+            SSL_verify_mode => 0,         # Disable certificate verification
+            verify_hostname => 0         # Disable hostname verification
+        );
+    }
+
+    # Add headers
+    $ua->default_header('Accept' => 'application/json');
+    $ua->credentials("$server_ip:8153", "Proxmox API", $username, $password);
+
+    # Prepare HTTP GET request
+    # print "URL: $url\n";
+    my $response = $ua->get($url);
+
+    # Check response status
+    if ($response->is_success) {
+        return decode_json($response->decoded_content); # Return raw Perl data structure
+    } else {
+        print "Response content: " . $response->decoded_content . "\n";
+        print "HTTP GET Request failed: " . $response->status_line;
+        return '';
+    }
+
+    return '';
+}
+
+sub qs_storage_volume_enum {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_storage_volume_enum");
+    my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolumeList) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+
+    my $api_name = 'storageVolumeEnum';
+    my $query_params = { storageVolumeList => $storageVolumeList };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    qs_write_to_log("QuantaStorPlugin - qs_storage_volume_enum - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+sub qs_storage_volume_acl_add {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_storage_volume_acl_add");
+    my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $host) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+
+    my $api_name = 'storageVolumeAclAddRemoveEx';
+    my $query_params = { storageVolumeList => $storageVolume, host => $host, modType => 0 };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    qs_write_to_log("QuantaStorPlugin - qs_storage_volume_acl_add - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+sub qs_storage_volume_acl_remove {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_storage_volume_acl_remove");
+    my ($server_ip, $username, $password, $cert_path, $timeout,  $storageVolume, $host) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+
+    my $api_name = 'storageVolumeAclAddRemoveEx';
+    my $query_params = { storageVolumeList => $storageVolume, host => $host, modType => 1 };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    qs_write_to_log("QuantaStorPlugin - qs_storage_volume_acl_remove - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+sub qs_storage_volume_utilization_enum {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_storage_volume_utilization_enum");
+    my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $offsetDays, $numberOfDays) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+
+    my $api_name = 'storageVolumeUtilizationEnum';
+    my $query_params = { storageVolume => $storageVolume, offsetDays => $offsetDays, numberOfDays => $numberOfDays };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    # qs_write_to_log("QuantaStorPlugin - qs_storage_volume_utilization_enum - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+sub qs_host_add {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_host_add");
+    my ($server_ip, $username, $password, $cert_path, $timeout, $hostname, $ipAddress, $param_username, $param_password,
+        $hostType, $description, $iqn) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+
+    my $api_name = 'hostAdd';
+    my $query_params = { hostname => $hostname, ipAddress => $ipAddress, username => $param_username, password => $param_username,
+                         hostType => $hostType, description => $description, iqn => $iqn };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    qs_write_to_log("QuantaStorPlugin - qs_host_add - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+sub qs_host_get {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_host_get");
+    my ($server_ip, $username, $password, $cert_path, $timeout, $host) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+
+    my $api_name = 'hostGet';
+    my $query_params = { host => $host };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    qs_write_to_log("QuantaStorPlugin - qs_host_get - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+sub qs_host_remove {
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_host_remove");
+    my ($server_ip, $username, $password, $cert_path, $timeout, $host) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+
+    my $api_name = 'hostRemove';
+    my $query_params = { host => $host };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    # qs_write_to_log("QuantaStorPlugin - qs_host_remove - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+
+#
+# Subroutine called from ZFSPlugin.pm
+#
+sub run_lun_command {
+    my ($scfg, $timeout, $method, @params) = @_;
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - run_lun_command '$method'");
+
+    syslog("info",(caller(0))[3] . " : $method(@params)");
+
+    if (defined($scfg->{'truenas_token_auth'}) && $scfg->{'truenas_token_auth'}) {
+        if (!defined($scfg->{'truenas_secret'})) {
+            die "Undefined `truenas_secret` variable.";
+        }
+    } elsif (!defined($scfg->{'qs_user'}) || !defined($scfg->{'qs_password'})) {
+        die "Undefined `qs_user` and/or `qs_password` variables.";
+    }
+    if (!defined $qs_server_list->{defined($scfg->{qs_apiv4_host}) ? $scfg->{qs_apiv4_host} : $scfg->{portal}}) {
+        qs_api_check($scfg);
+    }
+
+    if($method eq "create_lu") {
+        return run_create_lu($scfg, $timeout, $method, @params);
+    }
+    if($method eq "delete_lu") {
+        return run_delete_lu($scfg, $timeout, $method, @params);
+    }
+    if($method eq "import_lu") {
+        return run_create_lu($scfg, $timeout, $method, @params);
+    }
+    if($method eq "modify_lu") {
+        return run_modify_lu($scfg, $timeout, $method, @params);
+    }
+    if($method eq "add_view") {
+        return run_add_view($scfg, $timeout, $method, @params);
+    }
+    if($method eq "list_view") {
+        return run_list_view($scfg, $timeout, $method, @params);
+    }
+    if($method eq "list_extent") {
+        return run_list_extent($scfg, $timeout, $method, @params);
+    }
+    if($method eq "list_lu") {
+        return run_list_lu($scfg, $timeout, $method, "name", @params);
+    }
+
+    syslog("error",(caller(0))[3] . " : unknown method $method");
+    return undef;
+}
+
+#
+#
+#
+sub run_add_view {
+    return '';
+}
+
+#
+# a modify_lu occur by example on a zvol resize. we just need to destroy and recreate the lun with the same zvol.
+# Be careful, the first param is the new size of the zvol, we must shift params
+#
+sub run_modify_lu {
+    my ($scfg, $timeout, $method, @params) = @_;
+
+    syslog("info", (caller(0))[3] . " : called");
+
+    shift(@params);
+    run_delete_lu($scfg, $timeout, $method, @params);
+    return run_create_lu($scfg, $timeout, $method, @params);
+}
+
+#
+# 
+#
+sub run_list_view {
+    my ($scfg, $timeout, $method, @params) = @_;
+
+    syslog("info", (caller(0))[3] . " : called");
+
+    return run_list_lu($scfg, $timeout, $method, "lun-id", @params);
+}
+
+#
+#
+# Optimized
+sub run_list_lu {
+    my ($scfg, $timeout, $method, $result_value_type, @params) = @_;
+    my $object = $params[0];
+    my $result = undef;
+    my $luns = qs_list_lu($scfg);
+    syslog("info", (caller(0))[3] . " : called with (method: '$method'; result_value_type: '$result_value_type'; param[0]: '$object')");
+
+    $object =~ s/^\Q$dev_prefix//;
+    syslog("info", (caller(0))[3] . " : TrueNAS object to find: '$object'");
+    if (defined($luns->{$object})) {
+        my $lu_object = $luns->{$object};
+        $result = $result_value_type eq "lun-id" ? $lu_object->{$qs_api_variables->{'lunid'}} : $dev_prefix . $lu_object->{$qs_api_variables->{'extentpath'}};
+        syslog("info",(caller(0))[3] . " '$object' with key '$result_value_type' found with value: '$result'");
+    } else {
+        syslog("info", (caller(0))[3] . " '$object' with key '$result_value_type' was not found");
+    }
+    return $result;
+}
+
+#
+#
+# Optimzed
+sub run_list_extent {
+    my ($scfg, $timeout, $method, @params) = @_;
+    my $object = $params[0];
+    syslog("info", (caller(0))[3] . " : called with (method: '$method'; params[0]: '$object')");
+    my $result = undef;
+    my $luns = qs_list_lu($scfg);
+
+    $object =~ s/^\Q$dev_prefix//;
+    syslog("info", (caller(0))[3] . " TrueNAS object to find: '$object'");
+    if (defined($luns->{$object})) {
+        my $lu_object = $luns->{$object};
+        $result = $lu_object->{$qs_api_variables->{'extentnaa'}};
+        syslog("info",(caller(0))[3] . " '$object' wtih key '$qs_api_variables->{'extentnaa'}' found with value: '$result'");
+    } else {
+        syslog("info",(caller(0))[3] . " '$object' with key '$qs_api_variables->{'extentnaa'}' was not found");
+    }
+    return $result;
+}
+
+#
+#
+#
+sub run_create_lu {
+    my ($scfg, $timeout, $method, @params) = @_;
+    my $lun_path  = $params[0];
+
+    syslog("info", (caller(0))[3] . " : called with (method=$method; param[0]=$lun_path)");
+
+    my $lun_id    = qs_get_first_available_lunid($scfg);
+
+    die "Maximum number of LUNs per target is $MAX_LUNS" if scalar $lun_id >= $MAX_LUNS;
+    die "$params[0]: LUN $lun_path exists" if defined(run_list_lu($scfg, $timeout, $method, "name", @params));
+
+    my $target_id = qs_get_targetid($scfg);
+    die "Unable to find the target id for $scfg->{target}" if !defined($target_id);
+
+    # Create the extent
+    my $extent = qs_iscsi_create_extent($scfg, $lun_path);
+
+    # Associate the new extent to the target
+    my $link = qs_iscsi_create_target_to_extent($scfg, $target_id, $extent->{'id'}, $lun_id);
+
+    if (defined($link)) {
+       syslog("info","QuantaStor::create_lu(lun_path=$lun_path, lun_id=$lun_id) : successful");
+    } else {
+       die "Unable to create lun $lun_path";
+    }
+
+    return "";
+}
+
+#
+#
+# Optimzied
+sub run_delete_lu {
+    my ($scfg, $timeout, $method, @params) = @_;
+    my $lun_path  = $params[0];
+
+    syslog("info", (caller(0))[3] . " : called with (method: '$method'; param[0]: '$lun_path')");
+
+    my $luns      = qs_list_lu($scfg);
+    my $lun       = undef;
+    my $link      = undef;
+    $lun_path =~ s/^\Q$dev_prefix//;
+
+    if (defined($luns->{$lun_path})) {
+        $lun = $luns->{$lun_path};
+        syslog("info",(caller(0))[3] . " lun: '$lun_path' found");
+    } else {
+        die "Unable to find the lun $lun_path for $scfg->{target}";
+    }
+
+    my $target_id = qs_get_targetid($scfg);
+    die "Unable to find the target id for $scfg->{target}" if !defined($target_id);
+
+    # find the target to extent
+    my $target2extents = qs_iscsi_get_target_to_extent($scfg);
+
+    syslog("info", (caller(0))[3] . " : searching for 'targetextent' with (target_id=$target_id; lun_id=$lun->{$qs_api_variables->{'lunid'}}; extent_id=$lun->{id})");
+    foreach my $item (@$target2extents) {
+        if($item->{$qs_api_variables->{'targetid'}} == $target_id &&
+           $item->{$qs_api_variables->{'lunid'}} == $lun->{$qs_api_variables->{'lunid'}} &&
+           $item->{$qs_api_variables->{'extentid'}} == $lun->{'id'}) {
+            $link = $item;
+            syslog("info", (caller(0))[3] . " : found 'targetextent'(target_id=$item->{$qs_api_variables->{'targetid'}}; lun_id=$item->{$qs_api_variables->{'lunid'}}; extent_id=$item->{$qs_api_variables->{'extentid'}})");
+            last;
+        }
+    }
+    die "Unable to find the link for the lun $lun_path for $scfg->{target}" if !defined($link);
+
+    # Remove the extent
+    my $remove_extent = qs_iscsi_remove_extent($scfg, $lun->{'id'});
+
+    # Remove the link
+    my $remove_link = qs_iscsi_remove_target_to_extent($scfg, $link->{'id'});
+
+    if($remove_link == 1 && $remove_extent == 1) {
+        syslog("info", (caller(0))[3] . "(lun_path=$lun_path) : successful");
+    } else {
+        die "Unable to delete lun $lun_path";
+    }
+
+    return "";
+}
+
+
+sub qs_api_connect {
+    my ($scfg) = @_;
+
+    syslog("info", (caller(0))[3] . " : called");
+
+    my $scheme = $scfg->{qs_use_ssl} ? "https" : "http";
+    my $apihost = defined($scfg->{qs_apiv4_host}) ? $scfg->{qs_apiv4_host} : $scfg->{portal};
+
+    if (! defined $qs_server_list->{$apihost}) {
+        $qs_server_list->{$apihost} = REST::Client->new();
+    }
+    $qs_server_list->{$apihost}->setHost($scheme . '://' . $apihost);
+    $qs_server_list->{$apihost}->addHeader('Content-Type', 'application/json');
+    if (defined($scfg->{'truenas_token_auth'})) {
+        syslog("info", (caller(0))[3] . " : Authentication using Bearer Token Auth");
+        $qs_server_list->{$apihost}->addHeader('Authorization', 'Bearer ' . $scfg->{truenas_secret});
+    } else {
+        syslog("info", (caller(0))[3] . " : Authentication using Basic Auth");
+        $qs_server_list->{$apihost}->addHeader('Authorization', 'Basic ' . encode_base64($scfg->{qs_user} . ':' . $scfg->{qs_password}));
+    }
+    # If using SSL, don't verify SSL certs
+    if ($scfg->{qs_use_ssl}) {
+        $qs_server_list->{$apihost}->getUseragent()->ssl_opts(verify_hostname => 0);
+        $qs_server_list->{$apihost}->getUseragent()->ssl_opts(SSL_verify_mode => SSL_VERIFY_NONE);
+    }
+    # Check if the APIs are accessable via the selected host and scheme
+    my $api_response = $qs_server_list->{$apihost}->request('GET', $apiping);
+    my $code = $api_response->responseCode();
+    my $type = $api_response->responseHeader('Content-Type');
+    syslog("info", (caller(0))[3] . " : REST connection header Content-Type:'" . $type . "'");
+
+    # Make sure we are not recursion calling.
+    if ($runawayprevent > 2) {
+        qs_api_log_error($qs_server_list->{$apihost});
+        die "Loop recursion prevention";
+    # Successful connection
+    } elsif ($code == 200 && ($type =~ /^text\/plain/ || $type =~ /^application\/json/)) {
+        syslog("info", (caller(0))[3] . " : REST connection successful to '" . $apihost . "' using the '" . $scheme . "' protocol");
+        $runawayprevent = 0;
+    # A 302 or 200 (We already check for the correct 'type' above with a 200 so why add additional conditionals).
+    # So change to v2.0 APIs.
+    } elsif ($code == 302 || $code == 200) {
+        syslog("info", (caller(0))[3] . " : Changing to v2.0 API's");
+        $runawayprevent++;
+        $apiping =~ s/v1\.0/v2\.0/;
+        qs_api_connect($scfg);
+    # A 307 from QuantaStor means rediect http to https.
+    } elsif ($code == 307) {
+        syslog("info", (caller(0))[3] . " : Redirecting to HTTPS protocol");
+        $runawayprevent++;
+        $scfg->{qs_use_ssl} = 1;
+        qs_api_connect($scfg);
+    # For now, any other code we fail.
+    } else {
+        qs_api_log_error($qs_server_list->{$apihost});
+        die "Unable to connect to the QuantaStor API service at '" . $apihost . "' using the '" . $scheme . "' protocol";
+    }
+    $qs_rest_connection = $qs_server_list->{$apihost};
+    return;
+}
+
+#
+# Check to see what QuantaStor version we are running and set
+# the QuantaStor.pm to use the correct API version of QuantaStor
+#
+sub qs_api_check {
+    my ($scfg, $timeout) = @_;
+    #my $result = {};
+    #my $apihost = defined($scfg->{qs_apiv4_host}) ? $scfg->{qs_apiv4_host} : $scfg->{portal};
+#
+    #syslog("info", (caller(0))[3] . " : called");
+#
+    #if (! defined $qs_rest_connection->{$apihost}) {
+    #    qs_api_connect($scfg);
+    #    eval {
+    #        $result = decode_json($qs_rest_connection->responseContent());
+    #    };
+    #    if ($@) {
+    #        $result = $qs_rest_connection->responseContent();
+    #    } else {
+    #        $result = $qs_rest_connection->responseContent();
+    #    }
+    #    $result =~ s/"//g;
+    #    syslog("info", (caller(0))[3] . " : successful : Server version: " . $result);
+    #    if ($result =~ /^(TrueNAS|FreeNAS)-(\d+)\.(\d+)\-U(\d+)(?(?=\.)\.(\d+))$/) {
+    #        $product_name = $1;
+    #        $truenas_version = sprintf("%02d%02d%02d%02d", $2, $3 || 0, $4 || 0, $5 || 0);
+    #    } elsif ($result =~ /^(TrueNAS)-(\d+)\.(\d+)(?(?=\-U\d+)-U(\d+)|-\w+)(?(?=\.).(\d+))$/) {
+    #        $product_name = $1;
+    #        $truenas_version = sprintf("%02d%02d%02d%02d", $2, $3 || 0, $4 || 0, $6 || 0);
+    #        $truenas_release_type = $5 || "Production";
+    #    } elsif ($result =~ /^(TrueNAS-SCALE)-(\d+)\.(\d+)(?(?=\-)-(\w+))\.(\d+)(?(?=\.)\.(\d+))(?(?=\-)-(\d+))$/) {
+    #        $product_name = $1;
+    #        $truenas_version = sprintf("%02d%02d%02d%02d", $2, $3 || 0, $5 || 0, $7 || 0);
+    #        $truenas_release_type = $4 || "Production";
+    #    } else {
+    #        $product_name = "Unknown";
+    #        $truenas_release_type = "Unknown";
+    #        syslog("error", (caller(0))[3] . " : Could not parse the version of TrueNAS.");
+    #    }
+    #    syslog("info", (caller(0))[3] . " : ". $product_name . " Unformatted Version: " . $truenas_version);
+    #    if ($truenas_version >= 11030100) {
+    #        $freenas_api_version = "v2.0";
+    #        $dev_prefix = "/dev/";
+    #    }
+    #    if ($truenas_release_type ne "Production") {
+    #        syslog("warn", (caller(0))[3] . " : The '" . $product_name . "' release type of '" . $truenas_release_type . "' may not worked due to unsupported changes.");
+    #    }
+    #} else {
+    #    syslog("info", (caller(0))[3] . " : REST Client already initialized");
+    #}
+    #syslog("info", (caller(0))[3] . " : Using " . $product_name . " API version " . $freenas_api_version);
+    #$freenas_api_methods   = $freenas_api_version_matrix->{$freenas_api_version}->{'methods'};
+    #$freenas_api_variables = $freenas_api_version_matrix->{$freenas_api_version}->{'variables'};
+    #$freenas_global_config = $freenas_global_config_list->{$apihost} = (!defined($freenas_global_config_list->{$apihost})) ? freenas_iscsi_get_globalconfiguration($scfg) : $freenas_global_config_list->{$apihost};
+
+    return;
+}
+
+
+#
+### FREENAS API CALLING ROUTINE ###
+#
+#sub qs_api_call {
+#    my ($scfg, $method, $path, $data) = @_;
+    #my $apihost = defined($scfg->{freenas_apiv4_host}) ? $scfg->{freenas_apiv4_host} : $scfg->{portal};
+#
+    #syslog("info", (caller(0))[3] . " : called for host '" . $apihost . "'");
+#
+    #$method = uc($method);
+    #if (! $method =~ /^(?>GET|DELETE|POST)$/) {
+    #    syslog("info", (caller(0))[3] . " : Invalid HTTP RESTful service method '$method'");
+    #    die "Invalid HTTP RESTful service method '$method' used.";
+    #}
+#
+    #if (! defined $freenas_server_list->{$apihost}) {
+    #    freenas_api_check($scfg);
+    #}
+    #$freenas_rest_connection = $freenas_server_list->{$apihost};
+    #$freenas_global_config = $freenas_global_config_list->{$apihost};
+    #my $json_data = (defined $data) ? encode_json($data) : undef;
+    #$freenas_rest_connection->request($method, $path, $json_data);
+    #syslog("info", (caller(0))[3] . " : successful");
+
+#    return;
+#}
+
+#
+# Writes the Response and Content to SysLog 
+#
+sub qs_api_log_error {
+    my ($rest_connection) = @_;
+    my $connection = ((defined $rest_connection) ? $rest_connection : $qs_rest_connection);
+    syslog("info","[ERROR]FreeNAS::API::" . (caller(1))[3] . " : Response code: " . $connection->responseCode());
+    syslog("info","[ERROR]FreeNAS::API::" . (caller(1))[3] . " : Response content: " . $connection->responseContent());
+    return 1;
+}
+
+#
+#
+#
+sub qs_iscsi_get_globalconfiguration {
+    my ($scfg) = @_;
+
+    syslog("info", (caller(0))[3] . " : called");
+
+    qs_api_call($scfg, 'GET', $qs_api_methods->{'config'}->{'resource'}, $qs_api_methods->{'config'}->{'get'});
+    my $code = $qs_rest_connection->responseCode();
+    if ($code == 200) {
+        my $result = decode_json($qs_rest_connection->responseContent());
+        syslog("info", (caller(0))[3] . " : target_basename=" . $result->{$qs_api_variables->{'basename'}});
+        return $result;
+    } else {
+        qs_api_log_error();
+        return undef;
+    }
+}
+
+#
+# Returns a list of all extents.
+#
+sub qs_iscsi_get_extent {
+    my ($scfg) = @_;
+
+    syslog("info", (caller(0))[3] . " : called");
+
+    qs_api_call($scfg, 'GET', $qs_api_methods->{'extent'}->{'resource'} . "?limit=0", $qs_api_methods->{'extent'}->{'get'});
+    my $code = $qs_rest_connection->responseCode();
+    if ($code == 200) {
+        my $result = decode_json($qs_rest_connection->responseContent());
+        syslog("info", (caller(0))[3] . " : successful");
+        return $result;
+    } else {
+        qs_api_log_error();
+        return undef;
+    }
+}
+
+#
+# Create an extent on FreeNas
+# http://api.freenas.org/resources/iscsi/index.html#create-resource
+# Parameters:
+#   - target config (scfg)
+#   - lun_path
+#
+sub qs_iscsi_create_extent {
+    my ($scfg, $lun_path) = @_;
+
+    syslog("info", (caller(0))[3] . " : called with (lun_path=$lun_path)");
+
+    my $name = $lun_path;
+    $name  =~ s/^.*\///; # all from last /
+
+    my $pool = $scfg->{'pool'};
+    # If TrueNAS-SCALE the slashes (/) need to be converted to dashes (-)
+    if ($product_name eq "TrueNAS-SCALE") {
+        $pool =~ s/\//-/g;
+        syslog("info", (caller(0))[3] . " : TrueNAS-SCALE slash to dash conversion '" . $pool ."'");
+    }
+    $name  = $pool . ($product_name eq "TrueNAS-SCALE" ? '-' : '/') . $name;
+    syslog("info", (caller(0))[3] . " : " . $product_name . " extent '". $name . "'");
+
+    my $device = $lun_path;
+    $device =~ s/^\/dev\///; # strip /dev/
+
+    my $post_body = {};
+    while ((my $key, my $value) = each %{$qs_api_methods->{'extent'}->{'post_body'}}) {
+        $post_body->{$key} = ($value =~ /^\$.+$/) ? eval $value : $value;
+    }
+
+    qs_api_call($scfg, 'POST', $qs_api_methods->{'extent'}->{'resource'}, $post_body);
+    my $code = $qs_rest_connection->responseCode();
+    if ($code == 200 || $code == 201) {
+        my $result = decode_json($qs_rest_connection->responseContent());
+        syslog("info", "FreeNAS::API::create_extent(lun_path=" . $result->{$qs_api_variables->{'extentpath'}} . ") : successful");
+        return $result;
+    } else {
+        qs_api_log_error();
+        return undef;
+    }
+}
+
+#
+# Remove an extent by it's id
+# http://api.freenas.org/resources/iscsi/index.html#delete-resource
+# Parameters:
+#    - scfg
+#    - extent_id
+#
+sub qs_iscsi_remove_extent {
+    my ($scfg, $extent_id) = @_;
+
+    syslog("info", (caller(0))[3] . " : called with (extent_id=$extent_id)");
+    qs_api_call($scfg, 'DELETE', $qs_api_methods->{'extent'}->{'resource'} . (($qs_api_version eq "v2.0") ? "id/" : "") . "$extent_id/", $qs_api_methods->{'extent'}->{'delete_body'});
+    my $code = $qs_rest_connection->responseCode();
+    if ($code == 200 || $code == 204) {
+        syslog("info", (caller(0))[3] . "(extent_id=$extent_id) : successful");
+        return 1;
+    } else {
+        qs_api_log_error();
+        return 0;
+    }
+}
+
+#
+# Returns a list of all targets
+# http://api.freenas.org/resources/iscsi/index.html#get--api-v1.0-services-iscsi-target-
+#
+sub qs_iscsi_get_target {
+    my ($scfg) = @_;
+
+    syslog("info", (caller(0))[3] . " : called");
+
+    qs_api_call($scfg, 'GET', $qs_api_methods->{'target'}->{'resource'} . "?limit=0", $qs_api_methods->{'target'}->{'get'});
+    my $code = $qs_rest_connection->responseCode();
+    if ($code == 200) {
+        my $result = decode_json($qs_rest_connection->responseContent());
+        syslog("info", (caller(0))[3] . " : successful");
+        return $result;
+    } else {
+        qs_api_log_error();
+        return undef;
+    }
+}
+
+#
+# Returns a list of associated extents to targets
+# http://api.freenas.org/resources/iscsi/index.html#get--api-v1.0-services-iscsi-targettoextent-
+#
+sub qs_iscsi_get_target_to_extent {
+    my ($scfg) = @_;
+
+    syslog("info", (caller(0))[3] . " : called");
+
+    qs_api_call($scfg, 'GET', $qs_api_methods->{'targetextent'}->{'resource'} . "?limit=0", $qs_api_methods->{'targetextent'}->{'get'});
+    my $code = $qs_rest_connection->responseCode();
+    if ($code == 200) {
+        my $result = decode_json($qs_rest_connection->responseContent());
+        syslog("info", (caller(0))[3] . " : successful");
+        # If 'iscsi_lunid' is undef then it is set to 'Auto' in FreeNAS
+        # which should be '0' in our eyes.
+        # This gave Proxmox 5.x and FreeNAS 11.1 a few issues.
+        foreach my $item (@$result) {
+            if (!defined($item->{$qs_api_variables->{'lunid'}})) {
+                $item->{$qs_api_variables->{'lunid'}} = 0;
+                syslog("info", (caller(0))[3] . " : change undef iscsi_lunid to 0");
+            }
+        }
+        return $result;
+    } else {
+        qs_api_log_error();
+        return undef;
+    }
+}
+
+#
+# Associate a FreeNas extent to a FreeNas Target
+# http://api.freenas.org/resources/iscsi/index.html#post--api-v1.0-services-iscsi-targettoextent-
+# Parameters:
+#   - target config (scfg)
+#   - FreeNas Target ID
+#   - FreeNas Extent ID
+#   - Lun ID
+#
+sub qs_iscsi_create_target_to_extent {
+    my ($scfg, $target_id, $extent_id, $lun_id) = @_;
+
+    syslog("info", (caller(0))[3] . " : called with (target_id=$target_id, extent_id=$extent_id, lun_id=$lun_id)");
+
+    my $post_body = {};
+    while ((my $key, my $value) = each %{$qs_api_methods->{'targetextent'}->{'post_body'}}) {
+        $post_body->{$key} = ($value =~ /^\$.+$/) ? eval $value : $value;
+    }
+
+    qs_api_call($scfg, 'POST', $qs_api_methods->{'targetextent'}->{'resource'}, $post_body);
+    my $code = $qs_rest_connection->responseCode();
+    if ($code == 200 || $code == 201) {
+        my $result = decode_json($qs_rest_connection->responseContent());
+        syslog("info", (caller(0))[3] . "(target_id=$target_id, extent_id=$extent_id, lun_id=$lun_id) : successful");
+        return $result;
+    } else {
+        qs_api_log_error();
+        return undef;
+    }
+}
+
+#
+# Remove a Target to extent by it's id
+# http://api.freenas.org/resources/iscsi/index.html#delete--api-v1.0-services-iscsi-targettoextent-(int-id)-
+# Parameters:
+#    - scfg
+#    - link_id
+#
+sub qs_iscsi_remove_target_to_extent {
+    my ($scfg, $link_id) = @_;
+
+    syslog("info", (caller(0))[3] . " : called with (link_id=$link_id)");
+
+    if ($qs_api_version eq "v2.0") {
+        syslog("info", (caller(0))[3] . "(link_id=$link_id) : V2.0 API's so NOT Needed...successful");
+        return 1;
+    }
+
+    qs_api_call($scfg, 'DELETE', $qs_api_methods->{'targetextent'}->{'resource'} . (($qs_api_version eq "v2.0") ? "id/" : "") . "$link_id/", $qs_api_methods->{'targetextent'}->{'delete_body'});
+    my $code = $qs_rest_connection->responseCode();
+    if ($code == 200 || $code == 204) {
+        syslog("info", (caller(0))[3] . "(link_id=$link_id) : successful");
+        return 1;
+    } else {
+        qs_api_log_error();
+        return 0;
+    }
+}
+
+#
+# Returns all luns associated to the current target defined by $scfg->{target}
+# This method returns an array reference like "freenas_iscsi_get_extent" do
+# but with an additionnal hash entry "iscsi_lunid" retrieved from "freenas_iscsi_get_target_to_extent"
+#
+sub qs_list_lu {
+    my ($scfg) = @_;
+
+    syslog("info", (caller(0))[3] . " : called");
+
+    my $targets   = qs_iscsi_get_target($scfg);
+    my $target_id = qs_get_targetid($scfg);
+
+    my %lun_hash;
+    my $iscsi_lunid = undef;
+
+    if(defined($target_id)) {
+        my $target2extents = qs_iscsi_get_target_to_extent($scfg);
+        my $extents        = qs_iscsi_get_extent($scfg);
+
+        foreach my $item (@$target2extents) {
+            if($item->{$qs_api_variables->{'targetid'}} == $target_id) {
+                foreach my $node (@$extents) {
+                    if($node->{'id'} == $item->{$qs_api_variables->{'extentid'}}) {
+                        if ($item->{$qs_api_variables->{'lunid'}} =~ /(\d+)/) {
+                            if (defined($node)) {
+                                $node->{$qs_api_variables->{'lunid'}} .= "$1";
+                                $lun_hash{$node->{$qs_api_variables->{'extentpath'}}} = $node;
+                            }
+                            last;
+                        } else {
+                            syslog("warn", (caller(0))[3] . " : iscsi_lunid did not pass tainted testing");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    syslog("info", (caller(0))[3] . " : successful");
+    return \%lun_hash;
+}
+
+#
+# Returns the first available "lunid" (in all targets namespaces)
+#
+sub qs_get_first_available_lunid {
+    my ($scfg) = @_;
+
+    syslog("info", (caller(0))[3] . " : called");
+
+    my $target_id      = qs_get_targetid($scfg);
+    my $target2extents = qs_iscsi_get_target_to_extent($scfg);
+    my @luns           = ();
+
+    foreach my $item (@$target2extents) {
+        push(@luns, $item->{$qs_api_variables->{'lunid'}}) if ($item->{$qs_api_variables->{'targetid'}} == $target_id);
+    }
+
+    my @sorted_luns =  sort {$a <=> $b} @luns;
+    my $lun_id      = 0;
+
+    # find the first hole, if not, give the +1 of the last lun
+    foreach my $lun (@sorted_luns) {
+        last if $lun != $lun_id;
+        $lun_id = $lun_id + 1;
+    }
+
+    syslog("info", (caller(0))[3] . " : $lun_id");
+    return $lun_id;
+}
+
+#
+# Returns the target id on FreeNas of the currently configured target of this PVE storage
+#
+sub qs_get_targetid {
+    my ($scfg) = @_;
+
+    syslog("info", (caller(0))[3] . " : called");
+
+    my $targets   = qs_iscsi_get_target($scfg);
+    my $target_id = undef;
+
+    foreach my $target (@$targets) {
+        my $iqn = $qs_global_config->{$qs_api_variables->{'basename'}} . ':' . $target->{$qs_api_variables->{'targetname'}};
+        if($iqn eq $scfg->{target}) {
+            $target_id = $target->{'id'};
+            last;
+        }
+    }
+    syslog("info", (caller(0))[3] . " : successful : $target_id");
+    return $target_id;
+}
+
+
+1;

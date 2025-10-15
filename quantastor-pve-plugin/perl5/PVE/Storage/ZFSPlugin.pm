@@ -11,8 +11,10 @@ use PVE::RPCEnvironment;
 use base qw(PVE::Storage::ZFSPoolPlugin);
 use PVE::Storage::LunCmd::Comstar;
 use PVE::Storage::LunCmd::Istgt;
+use PVE::Storage::LunCmd::QuantaStorPlugin;
 use PVE::Storage::LunCmd::Iet;
 use PVE::Storage::LunCmd::LIO;
+use PVE::Storage::QuantaStorPlugin;
 
 
 my @ssh_opts = ('-o', 'BatchMode=yes');
@@ -32,7 +34,7 @@ my $lun_cmds = {
 my $zfs_unknown_scsi_provider = sub {
     my ($provider) = @_;
 
-    die "$provider: unknown iscsi provider. Available [comstar, istgt, iet, LIO]";
+    die "$provider: unknown iscsi provider. Available [comstar, istgt, iet, LIO, quantastor]";
 };
 
 my $zfs_get_base = sub {
@@ -46,6 +48,8 @@ my $zfs_get_base = sub {
         return PVE::Storage::LunCmd::Iet::get_base;
     } elsif ($scfg->{iscsiprovider} eq 'LIO') {
         return PVE::Storage::LunCmd::LIO::get_base;
+    } elsif ($scfg->{iscsiprovider} eq 'quantastor') {
+        return PVE::Storage::LunCmd::QuantaStorPlugin::get_base;
     } else {
         $zfs_unknown_scsi_provider->($scfg->{iscsiprovider});
     }
@@ -68,6 +72,8 @@ sub zfs_request {
             $msg = PVE::Storage::LunCmd::Iet::run_lun_command($scfg, $timeout, $method, @params);
         } elsif ($scfg->{iscsiprovider} eq 'LIO') {
             $msg = PVE::Storage::LunCmd::LIO::run_lun_command($scfg, $timeout, $method, @params);
+        } elsif ($scfg->{iscsiprovider} eq 'quantastor') {
+            $msg = PVE::Storage::LunCmd::QuantaStorPlugin::run_lun_command($scfg, $timeout, $method, @params);
         } else {
             $zfs_unknown_scsi_provider->($scfg->{iscsiprovider});
         }
@@ -203,6 +209,22 @@ sub properties {
 	    description => "target portal group for Linux LIO targets",
 	    type => 'string',
 	},
+    qs_user => {
+	    description => "QuantaStor API username",
+	    type => 'string',
+	},
+    qs_password => {
+	    description => "QuantaStor API password",
+	    type => 'string',
+	},
+    qs_use_ssl => {
+	    description => "QuantaStor API access via SSL",
+	    type => 'string',
+	},
+    qs_apiv4_host => {
+	    description => "QuantaStor API host IPv4 address",
+	    type => 'string',
+	},
     };
 }
 
@@ -220,6 +242,10 @@ sub options {
 	comstar_hg => { optional => 1 },
 	comstar_tg => { optional => 1 },
 	lio_tpg => { optional => 1 },
+    qs_user => { optional => 1 },
+    qs_password => { optional => 1 },
+    qs_use_ssl => { optional => 1 },
+    qs_apiv4_host => { optional => 1 },
 	content => { optional => 1 },
 	bwlimit => { optional => 1 },
     };

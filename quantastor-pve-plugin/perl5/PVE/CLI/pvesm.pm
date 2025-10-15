@@ -88,8 +88,6 @@ sub setup_environment {
     PVE::RPCEnvironment->setup_default_cli_env();
 }
 
-
-PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - register_method - apiinfo");
 __PACKAGE__->register_method ({
     name => 'apiinfo',
     path => 'apiinfo',
@@ -114,7 +112,6 @@ __PACKAGE__->register_method ({
     }
 });
 
-PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - register_method - path");
 __PACKAGE__->register_method ({
     name => 'path',
     path => 'path',
@@ -145,7 +142,6 @@ __PACKAGE__->register_method ({
 
     }});
 
-PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - register_method - extractconfig");
 __PACKAGE__->register_method ({
     name => 'extractconfig',
     path => 'extractconfig',
@@ -259,7 +255,6 @@ my $print_status = sub {
     }
 };
 
-PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - register_method - export");
 __PACKAGE__->register_method ({
     name => 'export',
     path => 'export',
@@ -349,7 +344,6 @@ __PACKAGE__->register_method ({
     }
 });
 
-PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - register_method - import");
 __PACKAGE__->register_method ({
     name => 'import',
     path => 'import',
@@ -494,7 +488,6 @@ __PACKAGE__->register_method ({
     }
 });
 
-PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - register_method - prunebackups");
 __PACKAGE__->register_method ({
     name => 'prunebackups',
     path => 'prunebackups',
@@ -599,6 +592,7 @@ my $print_api_result = sub {
     PVE::CLIFormatter::print_api_result($data, $schema, undef, $options);
 };
 
+# these are the command definitions
 PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - Setting command defs");
 our $cmddef = {
     add => [ "PVE::API2::Storage::Config", 'create', ['type', 'storage'] ],
@@ -659,16 +653,17 @@ our $cmddef = {
 		printf "%-${maxlen}s %s\n", $rec->{target}, $rec->{portal};
 	    }
 	}],
+	# Scan method for quantastor plugin
 	quantastor => [ "PVE::API2::Storage::Scan", 'quantastorscan', ['server', 'username'], { node => $nodename }, sub  {
 	    my $res = shift;
 
 	    my $maxlen = 0;
 	    foreach my $rec (@$res) {
-		my $len = length ($rec->{pool});
+		my $len = length ($rec->{volume});
 		$maxlen = $len if $len > $maxlen;
 	    }
 	    foreach my $rec (@$res) {
-		printf "%-${maxlen}s %-${maxlen}s %s\n", $rec->{pool}, $rec->{qsid}, $rec->{server};
+		printf "%-${maxlen}s %-${maxlen}s %s\n", $rec->{volume}, $rec->{qsid}, $rec->{iqn};
 	    }
 	}],
 	lvm => [ "PVE::API2::Storage::Scan", 'lvmscan', [], { node => $nodename }, sub  {

@@ -339,6 +339,8 @@ __PACKAGE__->register_method({
 	return $data;
     }});
 
+
+PVE::Storage::QuantaStorPlugin::qs_write_to_log("Scan.pm - register_method - quantastorscan");
 __PACKAGE__->register_method({
     name => 'quantastorscan',
     path => 'quantastor',
@@ -372,16 +374,16 @@ __PACKAGE__->register_method({
 	items => {
 	    type => "object",
 	    properties => {
-		pool => {
-		    description => "QuantaStor ZFS Pool name.",
+		volume => {
+		    description => "QuantaStor iscsi volume name.",
 		    type => 'string',
 		},
 		qsid => {
-		    description => "UUID for QuantaStor ZFS pool",
+		    description => "UUID for QuantaStor iscsi volume",
 		    type => 'string',
 		},
-		server => {
-		    description => "IP address of the QuantaStor storage server.",
+		iqn => {
+		    description => "IQN of the QuantaStor iscsi volume.",
 		    type => 'string',
 		},
 	    },
@@ -392,12 +394,12 @@ __PACKAGE__->register_method({
 
 	my $password = delete $param->{password};
 
-	# call the quantastor scan Storage API - this response is decoded JSON
-	my @zfsPoolNames = PVE::Storage::QuantaStorPlugin::qs_discovery($param->{server},$param->{username},$password);
+	# call the quantastor scan Storage API - this response is decoded JSON - this should be volumes instead of pools
+	my @iscsiVolumeNames = PVE::Storage::QuantaStorPlugin::qs_discovery($param->{server},$param->{username},$password);
 
 	my $data = [];
-	foreach my $pool (@zfsPoolNames) {
-	    push @$data, { server => $param->{server}, pool => $pool->{name}, qsid => $pool->{id} };
+	foreach my $volume (@iscsiVolumeNames) {
+	    push @$data, { iqn => $volume->{iqn}, volume => $volume->{name}, qsid => $volume->{id} };
 	}
 
 	return $data;
