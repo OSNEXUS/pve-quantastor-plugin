@@ -14,7 +14,6 @@ use File::stat qw();
 use PVE::Tools qw(run_command);
 use PVE::JSONSchema qw(get_standard_option register_standard_option);
 use PVE::Cluster qw(cfs_register_file);
-use PVE::Storage::QuantaStorPlugin;
 
 use JSON;
 
@@ -27,7 +26,7 @@ use constant LOG_EXT => ".log";
 use constant NOTES_EXT => ".notes";
 
 # debug
-use PVE::Storage::QuantaStorPlugin;
+use PVE::Storage::LunCmd::QuantaStorPlugin;
 
 our @COMMON_TAR_FLAGS = qw(
     --one-file-system
@@ -633,6 +632,7 @@ sub parse_name_dir {
 
 sub parse_volname {
     my ($class, $volname) = @_;
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Plugin.pm - parse_volname $volname");
 
     if ($volname =~ m!^(\d+)/(\S+)/(\d+)/(\S+)$!) {
 	my ($basedvmid, $basename) = ($1, $2);
@@ -859,7 +859,7 @@ sub clone_image {
 }
 
 sub alloc_image {
-	PVE::Storage::QuantaStorPlugin::qs_write_to_log("Plugin.pm - alloc_image");
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Plugin.pm - alloc_image");
     my ($class, $storeid, $scfg, $vmid, $fmt, $name, $size) = @_;
 
     my $imagedir = $class->get_subdir($scfg, 'images');
@@ -1303,6 +1303,7 @@ my $get_subdir_files = sub {
 # See get_volume_attribute for a list of possible attributes.
 sub list_volumes {
     my ($class, $storeid, $scfg, $vmid, $content_types) = @_;
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Storage.pm - list_volumes - vmid: $vmid");
 
     my $res = [];
     my $vmlist = PVE::Cluster::get_vmlist();
@@ -1377,7 +1378,7 @@ sub volume_snapshot_info {
 }
 
 sub activate_storage {
-	PVE::Storage::QuantaStorPlugin::qs_write_to_log("Plugin.pm - activate_storage");
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Plugin.pm - activate_storage");
     my ($class, $storeid, $scfg, $cache) = @_;
 
     my $path = $scfg->{path};

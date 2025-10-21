@@ -39,7 +39,7 @@ use base qw(PVE::Storage::Plugin);
 # }
 
 sub qs_api_call {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_api_call");
+    qs_write_to_log("QuantaStorPlugin - qs_api_call");
     my ($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout) = @_;
 
     # Set a default timeout if not provided
@@ -98,7 +98,7 @@ sub qs_api_call {
 }
 
 sub qs_storage_volume_enum {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_storage_volume_enum");
+    qs_write_to_log("QuantaStorPlugin - qs_storage_volume_enum");
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolumeList) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
@@ -116,7 +116,7 @@ sub qs_storage_volume_enum {
 }
 
 sub qs_storage_volume_acl_add {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_storage_volume_acl_add");
+    qs_write_to_log("QuantaStorPlugin - qs_storage_volume_acl_add");
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $host) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
@@ -134,7 +134,7 @@ sub qs_storage_volume_acl_add {
 }
 
 sub qs_storage_volume_acl_remove {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_storage_volume_acl_remove");
+    qs_write_to_log("QuantaStorPlugin - qs_storage_volume_acl_remove");
     my ($server_ip, $username, $password, $cert_path, $timeout,  $storageVolume, $host) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
@@ -152,7 +152,7 @@ sub qs_storage_volume_acl_remove {
 }
 
 sub qs_storage_volume_utilization_enum {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_storage_volume_utilization_enum");
+    qs_write_to_log("QuantaStorPlugin - qs_storage_volume_utilization_enum");
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $offsetDays, $numberOfDays) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
@@ -170,7 +170,7 @@ sub qs_storage_volume_utilization_enum {
 }
 
 sub qs_host_add {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_host_add");
+    qs_write_to_log("QuantaStorPlugin - qs_host_add");
     my ($server_ip, $username, $password, $cert_path, $timeout, $hostname, $ipAddress, $param_username, $param_password, 
         $hostType, $description, $iqn) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
@@ -190,7 +190,7 @@ sub qs_host_add {
 }
 
 sub qs_host_get {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_host_get");
+    qs_write_to_log("QuantaStorPlugin - qs_host_get");
     my ($server_ip, $username, $password, $cert_path, $timeout, $host) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
@@ -208,7 +208,7 @@ sub qs_host_get {
 }
 
 sub qs_host_remove {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_host_remove");
+    qs_write_to_log("QuantaStorPlugin - qs_host_remove");
     my ($server_ip, $username, $password, $cert_path, $timeout, $host) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
@@ -248,7 +248,7 @@ sub qs_write_to_log {
 }
 
 sub qs_ls {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_ls");
+    qs_write_to_log("QuantaStorPlugin - qs_ls");
     my ($scfg, $storeid) = @_;
 
     my $server = $scfg->{server};
@@ -257,7 +257,7 @@ sub qs_ls {
     eval {
         # here we can run code to ask quantastor what volumes are available.
         my $pool_id = $scfg->{qspoolid} // '';
-        PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - qs_ls - qspoolid = $pool_id");
+        qs_write_to_log("QuantaStorPlugin - qs_ls - qspoolid = $pool_id");
         my $res = qs_storage_volume_enum($scfg->{server}, $scfg->{username}, $scfg->{password}, '', 300, '');
 
         # Filter volumes by storagePoolId
@@ -752,7 +752,7 @@ sub on_delete_hook {
 
 sub parse_volname {
     my ($class, $volname) = @_;
-    $class->qs_write_to_log("parse_volname : volname $volname");
+    qs_write_to_log("Plugin.pm - parse_volname $volname");
 
     return ('images', undef, undef);
 }
@@ -802,7 +802,7 @@ sub free_image {
 
 
 sub list_volumes {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - list_volumes");
+    qs_write_to_log("QuantaStorPlugin - list_volumes");
     my ($class, $storeid, $scfg, $vmid, $cts) = @_;
 
     my $res = [];
@@ -816,11 +816,11 @@ sub list_volumes {
     foreach my $id (keys %$vols) {
         my $volume = $vols->{$id};
         my $volid = "$storeid:$id";
-        PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - volid = $volid");
+        qs_write_to_log("QuantaStorPlugin - volid = $volid");
 
         my $info = $volume;
         $info->{volid} = $volid;
-        PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - Pushing in volume info $info->{volid}");
+        qs_write_to_log("QuantaStorPlugin - Pushing in volume info $info->{volid}");
         push @$res, $info;
     }
 
@@ -840,40 +840,8 @@ sub status {
     return undef;
 }
 
-# sub activate_storage {
-#     PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - activate_storage");
-#     my ($class, $storeid, $scfg, $cache) = @_;
-# 
-#     return if !assert_iscsi_support(1);
-# 
-#     my $sessions = iscsi_session($cache, $scfg->{target});
-#     my $portals = iscsi_portals($scfg->{target}, $scfg->{portal});
-#     my $do_login = !defined($sessions);
-# 
-#     if (!$do_login) {
-# 	# We should check that sessions for all portals are available
-# 	my $session_portals = [ map { $_->{portal} } (@$sessions) ];
-# 
-# 	for my $portal (@$portals) {
-# 	    if (!grep(/^\Q$portal\E$/, @$session_portals)) {
-# 		$do_login = 1;
-# 		last;
-# 	    }
-# 	}
-#     }
-# 
-#     if ($do_login) {
-# 	eval { iscsi_login($scfg->{target}, $portals); };
-# 	warn $@ if $@;
-#     } else {
-# 	# make sure we get all devices
-# 	iscsi_session_rescan($sessions);
-#     }
-# }
-
 sub activate_storage {
     my ($class, $storeid, $scfg, $cache) = @_;
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("QuantaStorPlugin - activate_storage");
     return 1;
 }
 

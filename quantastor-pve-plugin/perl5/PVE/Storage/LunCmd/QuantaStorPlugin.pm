@@ -16,103 +16,36 @@ use MIME::Base64;
 use JSON;
 
 # Global variable definitions
-my $MAX_LUNS = 255;                        # Max LUNS per target on the iSCSI server
-my $qs_server_list = undef;           # API connection HashRef using the IP address of the server
-my $qs_rest_connection = undef;       # Pointer to entry in $qs_server_list
-my $qs_global_config_list = undef;    # IQN HashRef using the IP address of the server
-my $qs_global_config = undef;         # Pointer to entry in $qs_global_config_list
-my $dev_prefix = "";
-my $product_name = undef;
-my $apiping = '/api/v1.0/system/version/'; # Initial API method for setup
-my $runawayprevent = 0;                    # Recursion prevention variable
+# my $MAX_LUNS = 255;                        # Max LUNS per target on the iSCSI server
+# my $qs_server_list = undef;           # API connection HashRef using the IP address of the server
+# my $qs_rest_connection = undef;       # Pointer to entry in $qs_server_list
+# my $qs_global_config_list = undef;    # IQN HashRef using the IP address of the server
+# my $qs_global_config = undef;         # Pointer to entry in $qs_global_config_list
+# my $dev_prefix = "";
+# my $product_name = undef;
+# my $apiping = '/api/v1.0/system/version/'; # Initial API method for setup
+# my $runawayprevent = 0;                    # Recursion prevention variable
+# 
+# # QuantaStor API definitions
+# my $qs_api_version = "v1.0";          # Default to v1.0 of the API's
+# my $qs_api_methods = undef;           # API Methods Nested HASH Ref
+# my $qs_api_variables = undef;         # API Variable Nested HASH Ref
+# my $truenas_version = undef;
+# my $truenas_release_type = "Production";
 
-# QuantaStor API definitions
-my $qs_api_version = "v1.0";          # Default to v1.0 of the API's
-my $qs_api_methods = undef;           # API Methods Nested HASH Ref
-my $qs_api_variables = undef;         # API Variable Nested HASH Ref
-my $truenas_version = undef;
-my $truenas_release_type = "Production";
+sub qs_write_to_log {
+    my ($msg) = @_;
 
-# QuantaStor API Versioning HashRef Matrix
-my $qs_api_version_matrix = {
-    "v1.0" => {
-        "methods" => {
-            "config"       => {
-                "resource" => "/api/v1.0/services/iscsi/globalconfiguration/",
-            },
-            "target"       => {
-                "resource" => "/api/v1.0/services/iscsi/target/",
-            },
-            "extent"       => {
-                "resource"  => "/api/v1.0/services/iscsi/extent/",
-                "post_body" => {
-                    "iscsi_target_extent_type" => "Disk",
-                    "iscsi_target_extent_name" => "\$name",
-                    "iscsi_target_extent_disk" => "\$device",
-                },
-            },
-            "targetextent" => {
-                "resource"  => "/api/v1.0/services/iscsi/targettoextent/",
-                "post_body" => {
-                    "iscsi_target" => "\$target_id",
-                    "iscsi_extent" => "\$extent_id",
-                    "iscsi_lunid" => "\$lun_id",
-                },
-            },
-        },
-        "variables" => {
-            "basename"     => "iscsi_basename",
-            "lunid"        => "iscsi_lunid",
-            "extentid"     => "iscsi_extent",
-            "targetid"     => "iscsi_target",
-            "extentpath"   => "iscsi_target_extent_path",
-            "extentnaa"    => "iscsi_target_extent_naa",
-            "targetname"   => "iscsi_target_name",
-        }
-    },
-    "v2.0" => {
-        "methods" => {
-            "config"       => {
-                "resource" => "/api/v2.0/iscsi/global",
-            },
-            "target"       => {
-                "resource" => "/api/v2.0/iscsi/target/",
-            },
-            "extent"       => {
-                "resource"    => "/api/v2.0/iscsi/extent/",
-                "delete_body" => {
-                    "remove" => \1,
-                    "force"  => \1,
-                },
-                "post_body"   => {
-                    "type"   => "DISK",
-                    "name"   => "\$name",
-                    "disk"   => "\$device",
-                },
-            },
-            "targetextent" => {
-                "resource"    => "/api/v2.0/iscsi/targetextent/",
-                "delete_body" => {
-                    "force"  => \1,
-                },
-                "post_body"   => {
-                    "target"  => "\$target_id",
-                    "extent"  => "\$extent_id",
-                    "lunid"   => "\$lun_id",
-                },
-            },
-        },
-        "variables" => {
-            "basename"     => "basename",
-            "lunid"        => "lunid",
-            "extentid"     => "extent",
-            "targetid"     => "target",
-            "extentpath"   => "path",
-            "extentnaa"    => "naa",
-            "targetname"   => "name",
-        },
-    },
-};
+    my $logfile = '/var/log/pve-quantastor-plugin.log';
+
+    # Open the file in append mode
+    if (open(my $fh, '>>', $logfile)) {
+        print $fh "$msg\n";
+        close($fh);
+    } else {
+        warn "Could not open log file '$logfile': $!";
+    }
+}
 
 
 #
@@ -123,14 +56,13 @@ sub get_base {
 }
 
 sub qs_api_call {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_call");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_call");
     my ($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout) = @_;
 
     # Set a default timeout if not provided
     $timeout //= 300;
 
     my $url = "https://$server_ip:8153/qstorapi/$api_name";
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_call - URL: $url");
 
     # Add query parameters to the URL if provided
     if ($query_params && %$query_params) {
@@ -174,6 +106,7 @@ sub qs_api_call {
     if ($response->is_success) {
         return decode_json($response->decoded_content); # Return raw Perl data structure
     } else {
+        qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_call - HTTP GET Request failed: " . $response->status_line);
         print "Response content: " . $response->decoded_content . "\n";
         print "HTTP GET Request failed: " . $response->status_line;
         return '';
@@ -183,25 +116,28 @@ sub qs_api_call {
 }
 
 sub qs_storage_volume_enum {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_enum");
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolumeList) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_enum, storageVolumeList: $storageVolumeList");
 
     my $api_name = 'storageVolumeEnum';
-    my $query_params = { storageVolumeList => $storageVolumeList };
+    my $query_params = { };
+    if ($storageVolumeList ne '') {
+        $query_params->{storageVolumeList} = $storageVolumeList;
+    }
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
     # Prettify the response for output
     my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_enum - Response:\n$pretty_result\n");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_enum - Response:\n$pretty_result\n");
 
     return $response;
 }
 
 sub qs_storage_volume_get {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_get");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_get");
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
@@ -212,22 +148,22 @@ sub qs_storage_volume_get {
     # Prettify the response for output
     my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_get - Response:\n$pretty_result\n");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_get - Response:\n$pretty_result\n");
 
     return $response;
 }
 
 sub qs_storage_volume_create {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_create");
     my ($server_ip, $username, $password, $cert_path, $timeout, $name, $size, $pool) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_create $name $size $pool");
 
     my $api_name = 'storageVolumeCreate';
     my $trim_pool_name = $pool;
     $trim_pool_name =~ s/^qs-//;
     my $query_params = {
         name => $name,
-        size => $size,
+        size => $size * 1024,
         provisionableId => $trim_pool_name
     };
 
@@ -236,13 +172,33 @@ sub qs_storage_volume_create {
     # Prettify the response for output
     my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_create - Response:\n$pretty_result\n");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_create - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+sub qs_storage_volume_delete {
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_delete");
+    my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+
+    my $api_name = 'storageVolumeDeleteEx';
+    my $query_params = {
+        storageVolume => $storageVolume
+    };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_delete - Response:\n$pretty_result\n");
 
     return $response;
 }
 
 sub qs_storage_volume_acl_add {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_add");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_add");
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $host) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
@@ -254,13 +210,13 @@ sub qs_storage_volume_acl_add {
     # Prettify the response for output
     my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_add - Response:\n$pretty_result\n");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_add - Response:\n$pretty_result\n");
 
     return $response;
 }
 
 sub qs_storage_volume_acl_remove {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_remove");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_remove");
     my ($server_ip, $username, $password, $cert_path, $timeout,  $storageVolume, $host) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
@@ -272,13 +228,13 @@ sub qs_storage_volume_acl_remove {
     # Prettify the response for output
     my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_remove - Response:\n$pretty_result\n");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_remove - Response:\n$pretty_result\n");
 
     return $response;
 }
 
 sub qs_storage_volume_utilization_enum {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_utilization_enum");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_utilization_enum");
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $offsetDays, $numberOfDays) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
@@ -290,13 +246,13 @@ sub qs_storage_volume_utilization_enum {
     # Prettify the response for output
     # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    # PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_utilization_enum - Response:\n$pretty_result\n");
+    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_utilization_enum - Response:\n$pretty_result\n");
 
     return $response;
 }
 
 sub qs_host_add {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_add");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_add");
     my ($server_ip, $username, $password, $cert_path, $timeout, $hostname, $ipAddress, $param_username, $param_password,
         $hostType, $description, $iqn) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
@@ -310,13 +266,13 @@ sub qs_host_add {
     # Prettify the response for output
     my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_add - Response:\n$pretty_result\n");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_add - Response:\n$pretty_result\n");
 
     return $response;
 }
 
 sub qs_host_get {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_get");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_get");
     my ($server_ip, $username, $password, $cert_path, $timeout, $host) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
@@ -328,13 +284,13 @@ sub qs_host_get {
     # Prettify the response for output
     # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    # PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_get - Response:\n$pretty_result\n");
+    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_get - Response:\n$pretty_result\n");
 
     return $response;
 }
 
 sub qs_host_remove {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_remove");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_remove");
     my ($server_ip, $username, $password, $cert_path, $timeout, $host) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
@@ -357,7 +313,7 @@ sub qs_host_remove {
 #
 sub run_lun_command {
     my ($scfg, $timeout, $method, @params) = @_;
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - run_lun_command '$method'");
+    qs_write_to_log("LunCmd/QuantaStor.pm - run_lun_command '$method'");
 
     if (!defined($scfg->{'qs_user'}) || !defined($scfg->{'qs_password'})) {
         die "Undefined `qs_user` and/or `qs_password` variables.";
@@ -407,7 +363,7 @@ sub run_add_view {
 # Be careful, the first param is the new size of the zvol, we must shift params
 #
 sub run_modify_lu {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - run_modify_lu");
+    qs_write_to_log("LunCmd/QuantaStor.pm - run_modify_lu");
     my ($scfg, $timeout, $method, @params) = @_;
 
     shift(@params);
@@ -419,7 +375,7 @@ sub run_modify_lu {
 # 
 #
 sub run_list_view {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - run_list_view");
+    qs_write_to_log("LunCmd/QuantaStor.pm - run_list_view");
     my ($scfg, $timeout, $method, @params) = @_;
 
     return run_list_lu($scfg, $timeout, $method, "lun-id", @params);
@@ -428,11 +384,118 @@ sub run_list_view {
 #
 #
 # Optimized
+#{
+#    "id": "30c82b82-e9c3-06ef-cd5e-d5e15a4a1f4f",
+#    "name": "test-target",
+#    "customId": "",
+#    "state": "0",
+#    "stateDetail": "",
+#    "type": "3",
+#    "createdTimeStamp": "2025-10-17T16:21:44Z",
+#    "createdByUserId": "437bb0da-549e-6619-ea0e-a91e05e6befb",
+#    "modifiedTimeStamp": "2025-10-17T16:21:46Z",
+#    "modifiedByUserId": "437bb0da-549e-6619-ea0e-a91e05e6befb",
+#    "isRemote": "false",
+#    "storageSystemId": "e0583283-350e-5173-06b3-816ee0f374cf",
+#    "ownershipRevision": "0",
+#    "internalUse": "0",
+#    "storagePoolId": "7b6f4eb4-0d07-6966-6442-3b3730925e55",
+#    "size": "10737418240",
+#    "isSnapshot": "false",
+#    "lazyCloneSnapshotPath": "",
+#    "snapshotParent": "",
+#    "mountPath": "/dev/zvol/qs-7b6f4eb4-0d07-6966-6442-3b3730925e55/30c82b82-e9c3-06ef-cd5e-d5e15a4a1f4f",
+#    "isActiveCheckpoint": "false",
+#    "createdBySchedule": "",
+#    "compressionRatio": "1.00",
+#    "compressionType": "on",
+#    "retentionTags": "0",
+#    "syncPolicy": "0",
+#    "copies": "1",
+#    "spaceUtilized": "57344",
+#    "logicalSpaceUtilized": "28672",
+#    "spaceUtilizedBySnapshots": "0",
+#    "spaceReserved": "0",
+#    "usedByRefReservation": "0",
+#    "vvolType": "0",
+#    "vvolParentId": "",
+#    "snapshotReferenceId": "",
+#    "numHolds": "0",
+#    "cachePolicyPrimary": "0",
+#    "cachePolicySecondary": "0",
+#    "resumeToken": "",
+#    "snapshotCount": "0",
+#    "createdByScheduleType": "0",
+#    "clones": "",
+#    "accessMode": "0",
+#    "description": "",
+#    "devicePath": "",
+#    "iqn": "iqn.2009-10.com.osnexus:7b6f4eb4-30c82b82e9c306ef:test-target",
+#    "isCloudBackup": "false",
+#    "useGuidIqn": "false",
+#    "lun": "0",
+#    "cloudContainerId": "",
+#    "target": "0",
+#    "relativeTargetId": "0",
+#    "volumeType": "5",
+#    "chapPolicy": "6",
+#    "blockSizeKb": "64",
+#    "chapUsername": "",
+#    "chapPassword": "",
+#    "storageLinkId": "OSNEXUS__QUANTASTOR__e0583283__30c82b82",
+#    "deviceDescriptor": "30c82b82e9c306efe0583283",
+#    "enableWriteCache": "false",
+#    "accessTimeStamp": "1970-01-01T00:00:00Z",
+#    "qosReadIops": "0",
+#    "qosWriteIops": "0",
+#    "qosReadBandwidth": "0",
+#    "qosWriteBandwidth": "0",
+#    "qosPolicyId": "",
+#    "eui": "eui.3330633832623832",
+#    "lunAssignmentPolicy": "0",
+#    "cephClusterId": "",
+#    "profileId": "1625cdb7-5d25-d9f6-99fd-2779f44095b6",
+#    "stripeSizeKb": "0",
+#    "stripeCount": "0",
+#    "mappingDisabled": "false",
+#    "portalGroupId": ""
+#}
+
 sub run_list_lu {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - run_list_lu");
+    qs_write_to_log("LunCmd/QuantaStor.pm - run_list_lu");
     my ($scfg, $timeout, $method, $result_value_type, @params) = @_;
-    #my $object = $params[0];
-    my $result = undef;
+    qs_write_to_log("LunCmd/QuantaStor.pm - run_list_lu - called with (method: '$method'; result_value_type: '$result_value_type'; param[0]: '$params[0]')");
+    my $object = $params[0];
+    my $result = $object;
+
+    # Get the zvol name from the full path
+    $object =~ s{^/dev/zvol/}{};
+    # Remove the qs-uuid/ part, leaving only the zvol name
+    $object =~ s{^qs-[^/]+/}{};
+    my $zvol_name = $object;
+    qs_write_to_log("LunCmd/QuantaStor.pm - run_list_lu - requested object: '$object', zvol_name: '$zvol_name'");
+    my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $zvol_name);
+
+    # happy path
+    if (defined($res_vol_get->{lun}) && defined($res_vol_get->{id})) {
+        if ($result_value_type eq "lun-id") {
+            $result = $res_vol_get->{lun};
+        } else {
+            $result = "/dev/zvol/qs-" . $res_vol_get->{storagePoolId} . "/" . $res_vol_get->{name};
+        }
+        qs_write_to_log("LunCmd/QuantaStor.pm - run_list_lu - found object: '$object' with result_value_type: '$result_value_type', result: '$result'");
+    } else {
+        qs_write_to_log("LunCmd/QuantaStor.pm - run_list_lu - object: '$object' not found");
+        $result = undef;
+    }
+
+
+
     #my $luns = qs_list_lu($scfg);
     #syslog("info", (caller(0))[3] . " : called with (method: '$method'; result_value_type: '$result_value_type'; param[0]: '$object')");
 
@@ -452,7 +515,7 @@ sub run_list_lu {
 #
 # Optimzed
 sub run_list_extent {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - run_list_extent");
+    qs_write_to_log("LunCmd/QuantaStor.pm - run_list_extent");
     my ($scfg, $timeout, $method, @params) = @_;
     #my $object = $params[0];
     #syslog("info", (caller(0))[3] . " : called with (method: '$method'; params[0]: '$object')");
@@ -475,9 +538,9 @@ sub run_list_extent {
 #
 #
 sub run_create_lu {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - run_create_lu");
+    qs_write_to_log("LunCmd/QuantaStor.pm - run_create_lu");
     my ($scfg, $timeout, $method, @params) = @_;
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - creating LU with Params: @params");
+    qs_write_to_log("LunCmd/QuantaStor.pm - creating LU with Params: @params");
     # e.g. params /dev/zvol/qs-7b6f4eb4-0d07-6966-6442-3b3730925e55/vm-100-disk-0
     my $lun_path  = $params[0];
 
@@ -486,7 +549,7 @@ sub run_create_lu {
     # Remove the qs-uuid/ part, leaving only the zvol name
     $lun_path =~ s{^qs-[^/]+/}{};
     my $zvol_name = $lun_path;
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - ZVOL Name: $zvol_name");
+    qs_write_to_log("LunCmd/QuantaStor.pm - ZVOL Name: $zvol_name");
     # make storageVolumeGet call to get the quantastor UUID and iqn of the zvol
     my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
                                             $scfg->{qs_username},
@@ -538,9 +601,52 @@ sub run_create_lu {
 #
 # Optimzied
 sub run_delete_lu {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - run_delete_lu");
+    qs_write_to_log("LunCmd/QuantaStor.pm - run_delete_lu");
     my ($scfg, $timeout, $method, @params) = @_;
-    #my $lun_path  = $params[0];
+    my $lun_path  = $params[0];
+    qs_write_to_log("LunCmd/QuantaStor.pm - run_delete_lu - called with (method: '$method'; param[0]: '$lun_path')");
+
+    # Get the zvol name from the full path
+    $lun_path =~ s{^/dev/zvol/}{};
+    # Remove the qs-uuid/ part, leaving only the zvol name
+    $lun_path =~ s{^qs-[^/]+/}{};
+    my $zvol_name = $lun_path;
+
+    # verify the zvol exists.
+    my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $zvol_name);
+    if (!defined($res_vol_get->{id})) {
+        die "LUN $zvol_name does not exist.";
+    }
+
+    # remove acl entry for local host
+    my $local_host_iqn = get_initiator_name();
+    my $res_host_get = qs_host_get($scfg->{qs_apiv4_host},
+                                        $scfg->{qs_username},
+                                        $scfg->{qs_password},
+                                        '',
+                                        300,
+                                        $local_host_iqn);
+
+    my $res_host_acl_remove = qs_storage_volume_acl_remove($scfg->{qs_apiv4_host},
+                                                            $scfg->{qs_username},
+                                                            $scfg->{qs_password},
+                                                            '',
+                                                            300,
+                                                            $res_vol_get->{id},
+                                                            $res_host_get->{id});
+
+    # remove the zvol
+    my $res_storage_volume_delete = qs_storage_volume_delete($scfg->{qs_apiv4_host},
+                                                            $scfg->{qs_username},
+                                                            $scfg->{qs_password},
+                                                            '',
+                                                            300,
+                                                            $res_vol_get->{id});
 
     #syslog("info", (caller(0))[3] . " : called with (method: '$method'; param[0]: '$lun_path')");
 
@@ -591,7 +697,7 @@ sub run_delete_lu {
 
 
 sub qs_api_connect {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_connect");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_connect");
     my ($scfg) = @_;
 
     #syslog("info", (caller(0))[3] . " : called");
@@ -657,7 +763,7 @@ sub qs_api_connect {
 # the QuantaStor.pm to use the correct API version of QuantaStor
 #
 sub qs_api_check {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_check");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_check");
     my ($scfg, $timeout) = @_;
     #my $result = {};
     #my $apihost = defined($scfg->{qs_apiv4_host}) ? $scfg->{qs_apiv4_host} : $scfg->{portal};
@@ -743,7 +849,7 @@ sub qs_api_check {
 # Writes the Response and Content to SysLog
 #
 sub qs_api_log_error {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_log_error");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_log_error");
     my ($rest_connection) = @_;
     #my $connection = ((defined $rest_connection) ? $rest_connection : $qs_rest_connection);
     #syslog("info","[ERROR]FreeNAS::API::" . (caller(1))[3] . " : Response code: " . $connection->responseCode());
@@ -755,7 +861,7 @@ sub qs_api_log_error {
 #
 #
 sub qs_iscsi_get_globalconfiguration {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_get_globalconfiguration");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_get_globalconfiguration");
     my ($scfg) = @_;
 
     #qs_api_call($scfg, 'GET', $qs_api_methods->{'config'}->{'resource'}, $qs_api_methods->{'config'}->{'get'});
@@ -774,7 +880,7 @@ sub qs_iscsi_get_globalconfiguration {
 # Returns a list of all extents.
 #
 sub qs_iscsi_get_extent {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_get_extent");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_get_extent");
     my ($scfg) = @_;
 
     #qs_api_call($scfg, 'GET', $qs_api_methods->{'extent'}->{'resource'} . "?limit=0", $qs_api_methods->{'extent'}->{'get'});
@@ -797,7 +903,7 @@ sub qs_iscsi_get_extent {
 #   - lun_path
 #
 sub qs_iscsi_create_extent {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_create_extent");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_create_extent");
     my ($scfg, $lun_path) = @_;
 
     #my $name = $lun_path;
@@ -840,7 +946,7 @@ sub qs_iscsi_create_extent {
 #    - extent_id
 #
 sub qs_iscsi_remove_extent {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_remove_extent");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_remove_extent");
     my ($scfg, $extent_id) = @_;
 
     #qs_api_call($scfg, 'DELETE', $qs_api_methods->{'extent'}->{'resource'} . (($qs_api_version eq "v2.0") ? "id/" : "") . "$extent_id/", $qs_api_methods->{'extent'}->{'delete_body'});
@@ -859,7 +965,7 @@ sub qs_iscsi_remove_extent {
 # http://api.freenas.org/resources/iscsi/index.html#get--api-v1.0-services-iscsi-target-
 #
 sub qs_iscsi_get_target {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_get_target");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_get_target");
     my ($scfg) = @_;
 
     #qs_api_call($scfg, 'GET', $qs_api_methods->{'target'}->{'resource'} . "?limit=0", $qs_api_methods->{'target'}->{'get'});
@@ -879,7 +985,7 @@ sub qs_iscsi_get_target {
 # http://api.freenas.org/resources/iscsi/index.html#get--api-v1.0-services-iscsi-targettoextent-
 #
 sub qs_iscsi_get_target_to_extent {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_get_target_to_extent");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_get_target_to_extent");
     my ($scfg) = @_;
 
     #qs_api_call($scfg, 'GET', $qs_api_methods->{'targetextent'}->{'resource'} . "?limit=0", $qs_api_methods->{'targetextent'}->{'get'});
@@ -913,7 +1019,7 @@ sub qs_iscsi_get_target_to_extent {
 #   - Lun ID
 #
 sub qs_iscsi_create_target_to_extent {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_create_target_to_extent");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_create_target_to_extent");
     my ($scfg, $target_id, $extent_id, $lun_id) = @_;
 
     #my $post_body = {};
@@ -941,7 +1047,7 @@ sub qs_iscsi_create_target_to_extent {
 #    - link_id
 #
 sub qs_iscsi_remove_target_to_extent {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_remove_target_to_extent");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_remove_target_to_extent");
     my ($scfg, $link_id) = @_;
 
     #if ($qs_api_version eq "v2.0") {
@@ -966,7 +1072,7 @@ sub qs_iscsi_remove_target_to_extent {
 # but with an additionnal hash entry "iscsi_lunid" retrieved from "freenas_iscsi_get_target_to_extent"
 #
 sub qs_list_lu {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_list_lu");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_list_lu");
     my ($scfg) = @_;
 
     my $targets   = qs_iscsi_get_target($scfg);
@@ -1002,11 +1108,11 @@ sub qs_list_lu {
 }
 
 sub qs_zfs_create_zvol {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_create_zvol");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_create_zvol");
     my ($scfg, $zvol, $size) = @_;
 
     # run qs storageVolumeCreate API
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_create_zvol - creating zvol: $zvol with size: $size, pool: $scfg->{pool}");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_create_zvol - creating zvol: $zvol with size: $size, pool: $scfg->{pool}");
     my $create_response = qs_storage_volume_create($scfg->{qs_apiv4_host}, $scfg->{qs_username}, $scfg->{qs_password}, '', 300, $zvol, $size, $scfg->{pool});
 }
 
@@ -1014,7 +1120,7 @@ sub qs_zfs_create_zvol {
 # Returns the first available "lunid" (in all targets namespaces)
 #
 sub qs_get_first_available_lunid {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_get_first_available_lunid");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_get_first_available_lunid");
     my ($scfg) = @_;
 
     #my $target_id      = qs_get_targetid($scfg);
@@ -1042,7 +1148,7 @@ sub qs_get_first_available_lunid {
 # Returns the target id on FreeNas of the currently configured target of this PVE storage
 #
 sub qs_get_targetid {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_get_targetid");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_get_targetid");
     my ($scfg) = @_;
 
     #my $targets   = qs_iscsi_get_target($scfg);
@@ -1074,7 +1180,7 @@ sub get_initiator_name {
 }
 
 sub activate_storage {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - activate_storage");
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm - activate_storage");
     my ($class, $storeid, $scfg, $cache) = @_;
     my $iqn = get_initiator_name();
     my $hostname = hostname() . "-proxmox-host";   # fix: use concatenation, not '+'
@@ -1145,6 +1251,309 @@ sub activate_storage {
 
     return 1;
 }
+
+sub qs_list_images {
+    my ($class, $storeid, $scfg, $vmid, $vollist, $cache) = @_;
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_list_images - vmid: $vmid, storeid: $storeid host: $scfg->{qs_apiv4_host}");
+    my $res = [];
+
+    my $zfs_list = qs_zfs_list_zvol($scfg);
+
+    for my $info (values $zfs_list->%*) {
+	my $volname = $info->{name};
+	my $parent = $info->{parent};
+	my $owner = $info->{vmid};
+
+	if ($parent && $parent =~ m/^(\S+)\@__base__$/) {
+	    my ($basename) = ($1);
+	    $info->{volid} = "$storeid:$basename/$volname";
+	} else {
+	    $info->{volid} = "$storeid:$volname";
+	}
+
+	if ($vollist) {
+	    my $found = grep { $_ eq $info->{volid} } @$vollist;
+	    next if !$found;
+	} else {
+	    next if defined ($vmid) && ($owner ne $vmid);
+	}
+
+	push @$res, $info;
+    }
+
+    return $res;
+}
+
+sub qs_zfs_list_zvol {
+    my ($scfg) = @_;
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm  - qs_zfs_list_zvol host: $scfg->{qs_apiv4_host}, pool: $scfg->{pool}");
+
+    #my $text = $class->zfs_request(
+	#$scfg,
+	#10,
+	#'list',
+	#'-o',
+	#'name,volsize,origin,type,refquota',
+	#'-t',
+	#'volume,filesystem',
+	#'-d1',
+	#'-Hp',
+	#$scfg->{pool},
+    #);
+    ## It's still required to have qs_zfs_parse_zvol_list filter by pool, because -d1 lists
+    ## $scfg->{pool} too and while unlikely, it could be named to be mistaken for a volume.
+    #my $zvols = qs_zfs_parse_zvol_list($text, $scfg->{pool});
+    #return {} if !$zvols;
+
+    #instead of this, use qs_storage_volume_list API
+    # json response list of storage volumes
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm  - making storage volume enum call using storage config host : $scfg->{qs_apiv4_host}");
+    my $res_volume_enum = qs_storage_volume_enum($scfg->{qs_apiv4_host}, $scfg->{qs_username}, $scfg->{qs_password}, '', 300, '');
+    my $zvols = qs_zfs_parse_zvol_list($res_volume_enum, $scfg->{pool});
+
+    my $list = {};
+
+
+    foreach my $zvol (@$zvols) {
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_zfs_list_zvol - processing zvol: $zvol->{name}");
+	my $name = $zvol->{name};
+	my $parent = $zvol->{origin};
+	if($zvol->{origin} && $zvol->{origin} =~ m/^$scfg->{pool}\/(\S+)$/){
+	    $parent = $1;
+	}
+
+	$list->{$name} = {
+	    name => $name,
+	    size => $zvol->{size},
+	    parent => $parent,
+	    format => $zvol->{format},
+            vmid => $zvol->{owner},
+        };
+    }
+
+    return $list;
+}
+
+sub qs_zfs_parse_zvol_list {
+    my ($json_data, $pool) = @_;
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_zfs_parse_zvol_list - called with ( pool: '$pool')");
+
+    my $list = ();
+
+    # trim qs- from pool name
+    $pool =~ s/^qs-//;
+    return $list if !$json_data;
+    # example: only return zvols from specified pool
+    #[
+    #   {
+    #      "cachePolicyPrimary" : 0,
+    #      "mappingDisabled" : false,
+    #      "spaceUtilized" : 57344,
+    #      "createdByScheduleType" : 0,
+    #      "enableWriteCache" : false,
+    #      "modifiedByUserId" : "437bb0da-549e-6619-ea0e-a91e05e6befb",
+    #      "name" : "test-target",
+    #      "spaceUtilizedBySnapshots" : 0,
+    #      "cachePolicySecondary" : 0,
+    #      "vvolType" : 0,
+    #      "size" : 10737418240,
+    #      "type" : 3,
+    #      "compressionType" : "on",
+    #      "compressionRatio" : "1.00",
+    #      "vvolParentId" : null,
+    #      "ownershipRevision" : 0,
+    #      "qosReadIops" : 0,
+    #      "createdTimeStamp" : "2025-10-17 16:21:44+00:00",
+    #      "volumeType" : 5,
+    #      "qosWriteBandwidth" : 0,
+    #      "logicalSpaceUtilized" : 28672,
+    #      "snapshotCount" : 0,
+    #      "lun" : 0,
+    #      "qosReadBandwidth" : 0,
+    #      "accessMode" : 0,
+    #      "modifiedTimeStamp" : "2025-10-17 16:21:46+00:00",
+    #      "usedByRefReservation" : 0,
+    #      "chapUsername" : null,
+    #      "relativeTargetId" : 0,
+    #      "chapPassword" : null,
+    #      "eui" : "eui.3330633832623832",
+    #      "storageLinkId" : "OSNEXUS__QUANTASTOR__e0583283__30c82b82",
+    #      "isActiveCheckpoint" : false,
+    #      "target" : 0,
+    #      "lazyCloneSnapshotPath" : null,
+    #      "syncPolicy" : 0,
+    #      "description" : "None",
+    #      "deviceDescriptor" : "30c82b82e9c306efe0583283",
+    #      "chapPolicy" : 6,
+    #      "qosWriteIops" : 0,
+    #      "stripeSizeKb" : 0,
+    #      "mountPath" : "/dev/zvol/qs-7b6f4eb4-0d07-6966-6442-3b3730925e55/30c82b82-e9c3-06ef-cd5e-d5e15a4a1f4f",
+    #      "devicePath" : null,
+    #      "resumeToken" : null,
+    #      "cloudContainerId" : null,
+    #      "snapshotParent" : null,
+    #      "createdBySchedule" : null,
+    #      "storageSystemId" : "e0583283-350e-5173-06b3-816ee0f374cf",
+    #      "portalGroupId" : null,
+    #      "clones" : null,
+    #      "state" : 0,
+    #      "storagePoolId" : "7b6f4eb4-0d07-6966-6442-3b3730925e55",
+    #      "accessTimeStamp" : "1970-01-01 00:00:00+00:00",
+    #      "useGuidIqn" : false,
+    #      "stateDetail" : null,
+    #      "blockSizeKb" : 64,
+    #      "spaceReserved" : 0,
+    #      "isRemote" : false,
+    #      "createdByUserId" : "437bb0da-549e-6619-ea0e-a91e05e6befb",
+    #      "profileId" : "1625cdb7-5d25-d9f6-99fd-2779f44095b6",
+    #      "isSnapshot" : false,
+    #      "stripeCount" : 0,
+    #      "lunAssignmentPolicy" : 0,
+    #      "qosPolicyId" : null,
+    #      "internalUse" : 0,
+    #      "snapshotReferenceId" : null,
+    #      "numHolds" : 0,
+    #      "copies" : 1,
+    #      "iqn" : "iqn.2009-10.com.osnexus:7b6f4eb4-30c82b82e9c306ef:test-target",
+    #      "cephClusterId" : null,
+    #      "id" : "30c82b82-e9c3-06ef-cd5e-d5e15a4a1f4f",
+    #      "isCloudBackup" : false,
+    #      "retentionTags" : 0,
+    #      "customId" : null
+    #   },
+    #   {
+    #      "cachePolicySecondary" : 0,
+    #      "size" : 10737418240,
+    #      "vvolType" : 0,
+    #      "spaceUtilizedBySnapshots" : 0,
+    #      "compressionRatio" : "1.00",
+    #      "vvolParentId" : null,
+    #      "type" : 3,
+    #      "compressionType" : "on",
+    #      "spaceUtilized" : 57344,
+    #      "createdByScheduleType" : 0,
+    #      "cachePolicyPrimary" : 0,
+    #      "mappingDisabled" : false,
+    #      "name" : "vm-100-disk-0",
+    #      "enableWriteCache" : false,
+    #      "modifiedByUserId" : "437bb0da-549e-6619-ea0e-a91e05e6befb",
+    #      "relativeTargetId" : 47,
+    #      "chapPassword" : null,
+    #      "eui" : "eui.6635653462663565",
+    #      "chapUsername" : null,
+    #      "target" : 9,
+    #      "storageLinkId" : "OSNEXUS__QUANTASTOR__e0583283__f5e4bf5e",
+    #      "isActiveCheckpoint" : false,
+    #      "volumeType" : 5,
+    #      "qosWriteBandwidth" : 0,
+    #      "lun" : 1,
+    #      "snapshotCount" : 0,
+    #      "logicalSpaceUtilized" : 28672,
+    #      "qosReadIops" : 0,
+    #      "ownershipRevision" : 0,
+    #      "createdTimeStamp" : "2025-10-21 21:12:47+00:00",
+    #      "modifiedTimeStamp" : "2025-10-21 21:12:49+00:00",
+    #      "usedByRefReservation" : 10737360896,
+    #      "accessMode" : 0,
+    #      "qosReadBandwidth" : 0,
+    #      "snapshotParent" : null,
+    #      "portalGroupId" : null,
+    #      "clones" : null,
+    #      "storageSystemId" : "e0583283-350e-5173-06b3-816ee0f374cf",
+    #      "createdBySchedule" : null,
+    #      "resumeToken" : null,
+    #      "cloudContainerId" : null,
+    #      "storagePoolId" : "7b6f4eb4-0d07-6966-6442-3b3730925e55",
+    #      "accessTimeStamp" : "1970-01-01 00:00:00+00:00",
+    #      "state" : 0,
+    #      "syncPolicy" : 0,
+    #      "lazyCloneSnapshotPath" : null,
+    #      "stripeSizeKb" : 0,
+    #      "devicePath" : null,
+    #      "mountPath" : "/dev/zvol/qs-7b6f4eb4-0d07-6966-6442-3b3730925e55/f5e4bf5e-37a6-ac01-ca14-f52266ebddbf",
+    #      "deviceDescriptor" : "f5e4bf5e37a6ac01e0583283",
+    #      "description" : "None",
+    #      "qosWriteIops" : 0,
+    #      "chapPolicy" : 0,
+    #      "iqn" : "iqn.2009-10.com.osnexus:7b6f4eb4-f5e4bf5e37a6ac01:vm-100-disk-0",
+    #      "copies" : 1,
+    #      "cephClusterId" : null,
+    #      "numHolds" : 0,
+    #      "snapshotReferenceId" : null,
+    #      "customId" : null,
+    #      "isCloudBackup" : false,
+    #      "id" : "f5e4bf5e-37a6-ac01-ca14-f52266ebddbf",
+    #      "retentionTags" : 0,
+    #      "isRemote" : false,
+    #      "spaceReserved" : 10737418240,
+    #      "blockSizeKb" : 64,
+    #      "createdByUserId" : "437bb0da-549e-6619-ea0e-a91e05e6befb",
+    #      "stateDetail" : null,
+    #      "useGuidIqn" : false,
+    #      "qosPolicyId" : null,
+    #      "stripeCount" : 0,
+    #      "lunAssignmentPolicy" : 1,
+    #      "internalUse" : 0,
+    #      "profileId" : null,
+    #      "isSnapshot" : false
+    #   }
+    #]
+    foreach my $item (@$json_data) {
+        next unless defined $item->{storagePoolId} && $item->{storagePoolId} eq $pool;
+        my $zvol = {};
+        $zvol->{name} = $item->{name};
+        $zvol->{size} = $item->{size} + 0;
+        $zvol->{format} = 'raw';
+        # extract owner from name if possible
+        if ($item->{name} =~ m!^(vm|base|subvol|basevol)-(\d+)-(\S+)$!) {
+            $zvol->{owner} = $2;
+        } else {
+            $zvol->{owner} = '';
+        }
+        $zvol->{origin} = "";
+        qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_zfs_parse_zvol_list - processing dataset: '$item->{name}' (pool: '$pool', name: '$zvol->{name}', owner: '$zvol->{owner}')");
+        push @$list, $zvol;
+    }
+
+    #my @lines = split /\n/, $text;
+    #foreach my $line (@lines) {
+	#my ($dataset, $size, $origin, $type, $refquota) = split(/\s+/, $line);
+    #qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_zfs_parse_zvol_list - processing line: '$line'");
+	#next if !($type eq 'volume' || $type eq 'filesystem');
+#
+	#my $zvol = {};
+	#my @parts = split /\//, $dataset;
+	#next if scalar(@parts) < 2; # we need pool/name
+	#my $name = pop @parts;
+	#my $parsed_pool = join('/', @parts);
+    #qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_zfs_parse_zvol_list - processing dataset: '$dataset' (parsed_pool: '$parsed_pool', name: '$name')");
+	#next if $parsed_pool ne $pool;
+#
+	#next unless $name =~ m!^(vm|base|subvol|basevol)-(\d+)-(\S+)$!;
+	#$zvol->{owner} = $2;
+#
+	#$zvol->{name} = $name;
+	#if ($type eq 'filesystem') {
+	#    if ($refquota eq 'none') {
+	#	$zvol->{size} = 0;
+	#    } else {
+	#	$zvol->{size} = $refquota + 0;
+	#    }
+	#    $zvol->{format} = 'subvol';
+	#} else {
+	#    $zvol->{size} = $size + 0;
+	#    $zvol->{format} = 'raw';
+	#}
+	#if ($origin !~ /^-$/) {
+	#    $zvol->{origin} = $origin;
+	#}
+	#push @$list, $zvol;
+    #}
+
+    return $list;
+}
+
+
 
 
 1;

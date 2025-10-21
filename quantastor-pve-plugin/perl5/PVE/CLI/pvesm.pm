@@ -23,7 +23,7 @@ use PVE::API2::Storage::Content;
 use PVE::API2::Storage::PruneBackups;
 use PVE::API2::Storage::Scan;
 use PVE::API2::Storage::Status;
-use PVE::Storage::QuantaStorPlugin;
+use PVE::Storage::LunCmd::QuantaStorPlugin;
 use PVE::JSONSchema qw(get_standard_option);
 use PVE::PTY;
 
@@ -34,7 +34,7 @@ use base qw(PVE::CLIHandler);
 my $nodename = PVE::INotify::nodename();
 
 sub param_mapping {
-	PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - param_mapping");
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("pvesm - param_mapping");
     my ($name) = @_;
 
     my $password_map = PVE::CLIHandler::get_standard_mapping('pve-password', {
@@ -84,7 +84,7 @@ sub param_mapping {
 }
 
 sub setup_environment {
-	PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - setup_environment");
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("pvesm - setup_environment");
     PVE::RPCEnvironment->setup_default_cli_env();
 }
 
@@ -192,7 +192,7 @@ __PACKAGE__->register_method ({
     }});
 
 my $print_content = sub {
-	PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - print_content");
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("pvesm - print_content");
     my ($list) = @_;
 
     my ($maxlenname, $maxsize) = (0, 0);
@@ -223,7 +223,7 @@ my $print_content = sub {
 };
 
 my $print_status = sub {
-	PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - print_status");
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("pvesm - print_status");
     my $res = shift;
 
     my $maxlen = 0;
@@ -587,13 +587,13 @@ __PACKAGE__->register_method ({
     }});
 
 my $print_api_result = sub {
-	PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - print_api_result");
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("pvesm - print_api_result");
     my ($data, $schema, $options) = @_;
     PVE::CLIFormatter::print_api_result($data, $schema, undef, $options);
 };
 
 # these are the command definitions
-PVE::Storage::QuantaStorPlugin::qs_write_to_log("pvesm - Setting command defs");
+PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("pvesm - Setting command defs");
 our $cmddef = {
     add => [ "PVE::API2::Storage::Config", 'create', ['type', 'storage'] ],
     set => [ "PVE::API2::Storage::Config", 'update', ['storage'] ],
@@ -654,18 +654,18 @@ our $cmddef = {
 	    }
 	}],
 	# Scan method for quantastor plugin
-	quantastor => [ "PVE::API2::Storage::Scan", 'quantastorscan', ['server', 'username'], { node => $nodename }, sub  {
-	    my $res = shift;
+	# quantastor => [ "PVE::API2::Storage::Scan", 'quantastorscan', ['server', 'username'], { node => $nodename }, sub  {
+	#     my $res = shift;
 
-	    my $maxlen = 0;
-	    foreach my $rec (@$res) {
-		my $len = length ($rec->{volume});
-		$maxlen = $len if $len > $maxlen;
-	    }
-	    foreach my $rec (@$res) {
-		printf "%-${maxlen}s %-${maxlen}s %s\n", $rec->{volume}, $rec->{qsid}, $rec->{iqn};
-	    }
-	}],
+	#     my $maxlen = 0;
+	#     foreach my $rec (@$res) {
+	# 	my $len = length ($rec->{volume});
+	# 	$maxlen = $len if $len > $maxlen;
+	#     }
+	#     foreach my $rec (@$res) {
+	# 	printf "%-${maxlen}s %-${maxlen}s %s\n", $rec->{volume}, $rec->{qsid}, $rec->{iqn};
+	#     }
+	# }],
 	lvm => [ "PVE::API2::Storage::Scan", 'lvmscan', [], { node => $nodename }, sub  {
 	    my $res = shift;
 	    foreach my $rec (@$res) {
@@ -698,7 +698,7 @@ our $cmddef = {
     cifsscan => { alias => 'scan cifs' },
     glusterfsscan => { alias => 'scan glusterfs' },
     iscsiscan => { alias => 'scan iscsi' },
-	quantastorscan => { alias => 'scan quantastor'},
+	#quantastorscan => { alias => 'scan quantastor'},
     lvmscan => { alias => 'scan lvm' },
     lvmthinscan => { alias => 'scan lvmthin' },
     zfsscan => { alias => 'scan zfs' },
@@ -753,6 +753,6 @@ our $cmddef = {
     }],
 };
 
-PVE::Storage::QuantaStorPlugin::qs_write_to_log("========== done pvesm ==============");
+PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("========== done pvesm ==============");
 
 1;

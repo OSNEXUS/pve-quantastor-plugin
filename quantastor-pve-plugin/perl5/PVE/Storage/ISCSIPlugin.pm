@@ -10,7 +10,7 @@ use IO::File;
 use PVE::JSONSchema qw(get_standard_option);
 use PVE::Storage::Plugin;
 use PVE::Tools qw(run_command file_read_firstline trim dir_glob_regex dir_glob_foreach $IPV4RE $IPV6RE);
-use PVE::Storage::QuantaStorPlugin;
+use PVE::Storage::LunCmd::QuantaStorPlugin;
 
 use base qw(PVE::Storage::Plugin);
 
@@ -20,7 +20,7 @@ my $ISCSIADM = '/usr/bin/iscsiadm';
 
 my $found_iscsi_adm_exe;
 my sub assert_iscsi_support {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - assert_iscsi_support");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - assert_iscsi_support");
     my ($noerr) = @_;
     return $found_iscsi_adm_exe if $found_iscsi_adm_exe; # assume it won't be removed if ever found
 
@@ -61,7 +61,7 @@ sub iscsi_session_list {
 }
 
 sub iscsi_test_portal {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - iscsi_test_portal");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - iscsi_test_portal");
     my ($portal) = @_;
 
     my ($server, $port) = PVE::Tools::parse_host_and_port($portal);
@@ -98,7 +98,7 @@ sub iscsi_portals {
 }
 
 sub iscsi_discovery {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - iscsi_discovery");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - iscsi_discovery");
     my ($portals) = @_;
 
     assert_iscsi_support();
@@ -201,7 +201,7 @@ sub load_stable_scsi_paths {
 }
 
 sub iscsi_device_list {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - iscsi_device_list");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - iscsi_device_list");
     my $res = {};
 
     my $dirname = '/sys/class/iscsi_session';
@@ -303,6 +303,7 @@ sub options {
 
 sub parse_volname {
     my ($class, $volname) = @_;
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin.pm - parse_volname $volname");
 
     if ($volname =~ m!^\d+\.\d+\.\d+\.(\S+)$!) {
 	return ('images', $1, undef, undef, undef, undef, 'raw');
@@ -350,7 +351,7 @@ sub free_image {
 # list all luns regardless of set content_types, since we need it for
 # listing in the gui and we can only have images anyway
 sub list_volumes {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - list_volumes");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - list_volumes");
     my ($class, $storeid, $scfg, $vmid, $content_types) = @_;
 
     my $res = $class->list_images($storeid, $scfg, $vmid);
@@ -363,7 +364,7 @@ sub list_volumes {
 }
 
 sub list_images {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - list_images");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - list_images");
     my ($class, $storeid, $scfg, $vmid, $vollist, $cache) = @_;
 
     my $res = [];
@@ -414,7 +415,7 @@ sub status {
 }
 
 sub activate_storage {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - activate_storage");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - activate_storage");
     my ($class, $storeid, $scfg, $cache) = @_;
 
     return if !assert_iscsi_support(1);
@@ -455,7 +456,7 @@ sub deactivate_storage {
 }
 
 sub check_connection {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - check_connection");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin - check_connection");
     my ($class, $storeid, $scfg) = @_;
 
     my $portals = iscsi_portals($scfg->{target}, $scfg->{portal});

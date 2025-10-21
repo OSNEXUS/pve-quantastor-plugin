@@ -14,8 +14,6 @@ use PVE::PTY;
 use PVE::INotify;
 use PVE::CLIFormatter;
 
-use PVE::Storage::QuantaStorPlugin;
-
 use base qw(PVE::RESTHandler);
 
 # $cmddef defines which (sub)commands are available in a specific CLI class.
@@ -76,7 +74,6 @@ sub get_standard_mapping {
 }
 
 my $gen_param_mapping_func = sub {
-	PVE::Storage::QuantaStorPlugin::qs_write_to_log("CLIHandler.pm - gen_param_mapping_func");
     my ($cli_handler_class) = @_;
 
     my $param_mapping = $cli_handler_class->can('param_mapping');
@@ -643,7 +640,6 @@ my $handle_simple_cmd = sub {
 };
 
 sub run_cli_handler {
-	PVE::Storage::QuantaStorPlugin::qs_write_to_log("CLIHandler.pm - run_cli_handler");
     my ($class, %params) = @_;
 
     $cli_handler_class = $class;

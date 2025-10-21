@@ -14,7 +14,6 @@ use PVE::Storage::LunCmd::Istgt;
 use PVE::Storage::LunCmd::QuantaStorPlugin;
 use PVE::Storage::LunCmd::Iet;
 use PVE::Storage::LunCmd::LIO;
-use PVE::Storage::QuantaStorPlugin;
 
 
 my @ssh_opts = ('-o', 'BatchMode=yes');
@@ -103,16 +102,18 @@ sub zfs_request {
 }
 
 sub zfs_get_lu_name {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_get_lu_name");
     my ($class, $scfg, $zvol) = @_;
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_get_lu_name for class $class and zvol $zvol");
 
     my $base = $zfs_get_base->($scfg);
 
     $zvol = ($class->parse_volname($zvol))[1];
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - after parse_volname, zvol is $zvol");
 
     my $object = ($zvol =~ /^.+\/.+/) ? "$base/$zvol" : "$base/$scfg->{pool}/$zvol";
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - requesting object: $object");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - requesting object: $object");
     my $lu_name = $class->zfs_request($scfg, undef, 'list_lu', $object);
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - list_lu returned lu_name: $lu_name");
     # this is where list_lu is called. It should return the lu_name (guid) if it exists.
 
     return $lu_name if $lu_name;
@@ -120,8 +121,15 @@ sub zfs_get_lu_name {
     die "Could not find lu_name for zvol $zvol";
 }
 
+# sub parse_volname {
+#     my ($class, $volname) = @_;
+#     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - parse_volname $volname");
+# 
+#     return ('images', undef, undef);
+# }
+
 sub zfs_add_lun_mapping_entry {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_add_lun_mapping_entry");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_add_lun_mapping_entry");
     my ($class, $scfg, $zvol, $guid) = @_;
 
     if (!defined($guid)) {
@@ -132,7 +140,7 @@ sub zfs_add_lun_mapping_entry {
 }
 
 sub zfs_delete_lu {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_delete_lu");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_delete_lu");
     my ($class, $scfg, $zvol) = @_;
 
     my $guid = $class->zfs_get_lu_name($scfg, $zvol);
@@ -141,10 +149,10 @@ sub zfs_delete_lu {
 }
 
 sub zfs_create_zvol {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_create_zvol");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_create_zvol");
     my ($class, $scfg, $zvol, $size) = @_;
     if ($scfg->{iscsiprovider} eq 'quantastor') {
-        PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - creating ZFS volume $zvol of size ${size}K");
+        PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - creating ZFS volume $zvol of size ${size}K");
         PVE::Storage::LunCmd::QuantaStorPlugin::qs_zfs_create_zvol($scfg, $zvol, $size);
         return;
     }
@@ -152,18 +160,18 @@ sub zfs_create_zvol {
 }
 
 sub zfs_create_lu {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_create_lu");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_create_lu");
     my ($class, $scfg, $zvol) = @_;
 
     my $base = $zfs_get_base->($scfg);
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - creating LU for $base/$scfg->{pool}/$zvol");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - creating LU for $base/$scfg->{pool}/$zvol");
     my $guid = $class->zfs_request($scfg, undef, 'create_lu', "$base/$scfg->{pool}/$zvol");
 
     return $guid;
 }
 
 sub zfs_import_lu {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_import_lu");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_import_lu");
     my ($class, $scfg, $zvol) = @_;
 
     my $base = $zfs_get_base->($scfg);
@@ -171,7 +179,7 @@ sub zfs_import_lu {
 }
 
 sub zfs_resize_lu {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_resize_lu");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_resize_lu");
     my ($class, $scfg, $zvol, $size) = @_;
 
     my $guid = $class->zfs_get_lu_name($scfg, $zvol);
@@ -180,7 +188,7 @@ sub zfs_resize_lu {
 }
 
 sub zfs_get_lun_number {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_get_lun_number");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_get_lun_number");
     my ($class, $scfg, $guid) = @_;
 
     die "could not find lun_number for guid $guid" if !$guid;
@@ -274,27 +282,31 @@ sub options {
 # Storage implementation
 
 sub path {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - path");
     my ($class, $scfg, $volname, $storeid, $snapname) = @_;
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("$class - path - args: volname=$volname, snapname=$snapname, storeid=$storeid");
 
     die "direct access to snapshots not implemented"
 	if defined($snapname);
 
     my ($vtype, $name, $vmid) = $class->parse_volname($volname);
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - path - parsed volname: vtype=$vtype, name=$name, vmid=$vmid");
 
     my $target = $scfg->{target};
     my $portal = $scfg->{portal};
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - path - portal: $portal, target: $target");
 
     my $guid = $class->zfs_get_lu_name($scfg, $name);
     my $lun = $class->zfs_get_lun_number($scfg, $guid);
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - path - guid: $guid, lun: $lun");
 
     my $path = "iscsi://$portal/$target/$lun";
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - path - returning path: $path");
 
     return ($path, $vmid, $vtype);
 }
 
 sub create_base {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - create_base");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - create_base");
     my ($class, $storeid, $scfg, $volname) = @_;
 
     my $snap = '__base__';
@@ -323,7 +335,7 @@ sub create_base {
 }
 
 sub clone_image {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - clone_image");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - clone_image");
     my ($class, $scfg, $storeid, $volname, $vmid, $snap) = @_;
 
     my $name = $class->SUPER::clone_image($scfg, $storeid, $volname, $vmid, $snap);
@@ -338,7 +350,7 @@ sub clone_image {
 }
 
 sub alloc_image {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - alloc_image");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - alloc_image");
     my ($class, $storeid, $scfg, $vmid, $fmt, $name, $size) = @_;
     
     die "unsupported format '$fmt'" if $fmt ne 'raw';
@@ -349,7 +361,7 @@ sub alloc_image {
     my $volname = $name;
 
     $volname = $class->find_free_diskname($storeid, $scfg, $vmid, $fmt) if !$volname;
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - alloc_image - creating ZFS volume: $volname");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - alloc_image - creating ZFS volume: $volname");
 
     # need to implement zfs_create_zvol for this plugin that calls QuantaStor API
     $class->zfs_create_zvol($scfg, $volname, $size);
@@ -361,7 +373,7 @@ sub alloc_image {
 }
 
 sub free_image {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - free_image");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - free_image");
     my ($class, $storeid, $scfg, $volname, $isBase) = @_;
 
     my ($vtype, $name, $vmid) = $class->parse_volname($volname);
@@ -379,7 +391,7 @@ sub free_image {
 }
 
 sub volume_resize {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - volume_resize");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - volume_resize");
     my ($class, $scfg, $storeid, $volname, $size, $running) = @_;
 
     $volname = ($class->parse_volname($volname))[1];
@@ -392,7 +404,7 @@ sub volume_resize {
 }
 
 sub volume_snapshot_delete {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - volume_snapshot_delete");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - volume_snapshot_delete");
     my ($class, $scfg, $storeid, $volname, $snap, $running) = @_;
 
     $volname = ($class->parse_volname($volname))[1];
@@ -401,7 +413,7 @@ sub volume_snapshot_delete {
 }
 
 sub volume_snapshot_rollback {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - volume_snapshot_rollback");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - volume_snapshot_rollback");
     my ($class, $scfg, $storeid, $volname, $snap) = @_;
 
     $volname = ($class->parse_volname($volname))[1];
@@ -416,14 +428,14 @@ sub volume_snapshot_rollback {
 }
 
 sub storage_can_replicate {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - storage_can_replicate");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - storage_can_replicate");
     my ($class, $scfg, $storeid, $format) = @_;
 
     return 0;
 }
 
 sub volume_has_feature {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - volume_has_feature");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - volume_has_feature");
     my ($class, $scfg, $feature, $storeid, $volname, $snapname, $running) = @_;
 
     my $features = {
@@ -450,8 +462,44 @@ sub volume_has_feature {
 }
 
 # if we are quantastor type storage, we might want to set up quantastor host
+sub list_images {
+    my ($class, $storeid, $scfg, $vmid, $vollist, $cache) = @_;
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - list_images - vmid: $vmid, storeid: $storeid host: $scfg->{qs_apiv4_host}");
+
+    if ($scfg->{iscsiprovider} eq 'quantastor') {
+        return PVE::Storage::LunCmd::QuantaStorPlugin::qs_list_images($class, $storeid, $scfg, $cache);
+    }
+    #my $zfs_list = $class->zfs_list_zvol($scfg);
+#
+    #my $res = [];
+#
+    #for my $info (values $zfs_list->%*) {
+	#my $volname = $info->{name};
+	#my $parent = $info->{parent};
+	#my $owner = $info->{vmid};
+#
+	#if ($parent && $parent =~ m/^(\S+)\@__base__$/) {
+	#    my ($basename) = ($1);
+	#    $info->{volid} = "$storeid:$basename/$volname";
+	#} else {
+	#    $info->{volid} = "$storeid:$volname";
+	#}
+#
+	#if ($vollist) {
+	#    my $found = grep { $_ eq $info->{volid} } @$vollist;
+	#    next if !$found;
+	#} else {
+	#    next if defined ($vmid) && ($owner ne $vmid);
+	#}
+#
+	#push @$res, $info;
+    #}
+    
+    return $class->SUPER::list_images($storeid, $scfg, $vmid, $vollist, $cache);
+}
+
 sub activate_storage {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - activate_storage");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - activate_storage");
     my ($class, $storeid, $scfg, $cache) = @_;
     if ($scfg->{iscsiprovider} eq 'quantastor') {
         PVE::Storage::LunCmd::QuantaStorPlugin::activate_storage($class, $storeid, $scfg, $cache);
@@ -461,14 +509,14 @@ sub activate_storage {
 }
 
 sub deactivate_storage {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - deactivate_storage");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - deactivate_storage");
     my ($class, $storeid, $scfg, $cache) = @_;
 
     return 1;
 }
 
 sub activate_volume {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - activate_volume");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - activate_volume");
     my ($class, $storeid, $scfg, $volname, $snapname, $cache) = @_;
 
     die "unable to activate snapshot from remote zfs storage" if $snapname;
@@ -477,7 +525,7 @@ sub activate_volume {
 }
 
 sub deactivate_volume {
-    PVE::Storage::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - deactivate_volume");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - deactivate_volume");
     my ($class, $storeid, $scfg, $volname, $snapname, $cache) = @_;
 
     die "unable to deactivate snapshot from remote zfs storage" if $snapname;

@@ -340,70 +340,70 @@ __PACKAGE__->register_method({
     }});
 
 
-PVE::Storage::QuantaStorPlugin::qs_write_to_log("Scan.pm - register_method - quantastorscan");
-__PACKAGE__->register_method({
-    name => 'quantastorscan',
-    path => 'quantastor',
-    method => 'GET',
-    description => "Scan remote quantastor server.",
-    protected => 1,
-    proxyto => "node",
-    permissions => {
-	check => ['perm', '/storage', ['Datastore.Allocate']],
-    },
-    parameters => {
-	additionalProperties => 0,
-	properties => {
-	    node => get_standard_option('pve-node'),
-	    server => {
-		description => "The quantastor host (IP or DNS name with optional port).",
-		type => 'string', format => 'pve-storage-portal-dns',
-	    },
-		username => {
-		description => "User-name or API token-ID.",
-		type => 'string',
-	    },
-	    password => {
-		description => "User password or API token secret.",
-		type => 'string',
-	    },
-	},
-    },
-    returns => {
-	type => 'array',
-	items => {
-	    type => "object",
-	    properties => {
-		volume => {
-		    description => "QuantaStor iscsi volume name.",
-		    type => 'string',
-		},
-		qsid => {
-		    description => "UUID for QuantaStor iscsi volume",
-		    type => 'string',
-		},
-		iqn => {
-		    description => "IQN of the QuantaStor iscsi volume.",
-		    type => 'string',
-		},
-	    },
-	},
-    },
-    code => sub {
-	my ($param) = @_;
-
-	my $password = delete $param->{password};
-
-	# call the quantastor scan Storage API - this response is decoded JSON - this should be volumes instead of pools
-	my @iscsiVolumeNames = PVE::Storage::QuantaStorPlugin::qs_discovery($param->{server},$param->{username},$password);
-
-	my $data = [];
-	foreach my $volume (@iscsiVolumeNames) {
-	    push @$data, { iqn => $volume->{iqn}, volume => $volume->{name}, qsid => $volume->{id} };
-	}
-
-	return $data;
-    }});
+#PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Scan.pm - register_method - quantastorscan");
+#__PACKAGE__->register_method({
+#    name => 'quantastorscan',
+#    path => 'quantastor',
+#    method => 'GET',
+#    description => "Scan remote quantastor server.",
+#    protected => 1,
+#    proxyto => "node",
+#    permissions => {
+#	check => ['perm', '/storage', ['Datastore.Allocate']],
+#    },
+#    parameters => {
+#	additionalProperties => 0,
+#	properties => {
+#	    node => get_standard_option('pve-node'),
+#	    server => {
+#		description => "The quantastor host (IP or DNS name with optional port).",
+#		type => 'string', format => 'pve-storage-portal-dns',
+#	    },
+#		username => {
+#		description => "User-name or API token-ID.",
+#		type => 'string',
+#	    },
+#	    password => {
+#		description => "User password or API token secret.",
+#		type => 'string',
+#	    },
+#	},
+#    },
+#    returns => {
+#	type => 'array',
+#	items => {
+#	    type => "object",
+#	    properties => {
+#		volume => {
+#		    description => "QuantaStor iscsi volume name.",
+#		    type => 'string',
+#		},
+#		qsid => {
+#		    description => "UUID for QuantaStor iscsi volume",
+#		    type => 'string',
+#		},
+#		iqn => {
+#		    description => "IQN of the QuantaStor iscsi volume.",
+#		    type => 'string',
+#		},
+#	    },
+#	},
+#    },
+#    code => sub {
+#	my ($param) = @_;
+#
+#	my $password = delete $param->{password};
+#
+#	# call the quantastor scan Storage API - this response is decoded JSON - this should be volumes instead of pools
+#	my @iscsiVolumeNames = PVE::Storage::QuantaStorPlugin::qs_discovery($param->{server},$param->{username},$password);
+#
+#	my $data = [];
+#	foreach my $volume (@iscsiVolumeNames) {
+#	    push @$data, { iqn => $volume->{iqn}, volume => $volume->{name}, qsid => $volume->{id} };
+#	}
+#
+#	return $data;
+#    }});
 
 __PACKAGE__->register_method({
     name => 'lvmscan',
