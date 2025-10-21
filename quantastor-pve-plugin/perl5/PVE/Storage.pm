@@ -202,7 +202,7 @@ sub storage_check_node {
 }
 
 sub storage_check_enabled {
-    # PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage_check_enabled");
+    #PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage_check_enabled");
     my ($cfg, $storeid, $node, $noerr) = @_;
 
     my $scfg = storage_config($cfg, $storeid);
@@ -541,6 +541,7 @@ sub parse_volname {
 sub parse_volume_id {
     PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - parse_volume_id");
     my ($volid, $noerr) = @_;
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volid: $volid");
 
     return PVE::Storage::Plugin::parse_volume_id($volid, $noerr);
 }
@@ -687,6 +688,7 @@ sub path_to_volume_id {
 sub path {
     PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - path");
     my ($cfg, $volid, $snapname) = @_;
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - volid: $volid");
 
     my ($storeid, $volname) = parse_volume_id($volid);
 
@@ -694,6 +696,7 @@ sub path {
 
     my $plugin = PVE::Storage::Plugin->lookup($scfg->{type});
     my ($path, $owner, $vtype) = $plugin->path($scfg, $volname, $storeid, $snapname);
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - path: $path");
     return wantarray ? ($path, $owner, $vtype) : $path;
 }
 
@@ -1054,7 +1057,7 @@ sub vdisk_alloc {
     activate_storage($cfg, $storeid);
 
     my $plugin = PVE::Storage::Plugin->lookup($scfg->{type});
-
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - vdisk_alloc - alloc vdisk with vmid: $vmid, format: $fmt, name: $name, size: $size");
     # lock shared storage
     return $plugin->cluster_lock_storage($storeid, $scfg->{shared}, undef, sub {
 	my $old_umask = umask(umask|0037);
@@ -1221,6 +1224,7 @@ sub activate_storage {
     my $scfg = storage_check_enabled($cfg, $storeid);
 
     return if $cache->{activated}->{$storeid};
+    PVE::Storage::QuantaStorPlugin::qs_write_to_log("Storage.pm - storage is not actived yet.");
 
     $cache->{uevent_seqnum} = uevent_seqnum() if !$cache->{uevent_seqnum};
 

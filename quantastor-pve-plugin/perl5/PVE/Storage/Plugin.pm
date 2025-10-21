@@ -14,6 +14,7 @@ use File::stat qw();
 use PVE::Tools qw(run_command);
 use PVE::JSONSchema qw(get_standard_option register_standard_option);
 use PVE::Cluster qw(cfs_register_file);
+use PVE::Storage::QuantaStorPlugin;
 
 use JSON;
 
@@ -858,6 +859,7 @@ sub clone_image {
 }
 
 sub alloc_image {
+	PVE::Storage::QuantaStorPlugin::qs_write_to_log("Plugin.pm - alloc_image");
     my ($class, $storeid, $scfg, $vmid, $fmt, $name, $size) = @_;
 
     my $imagedir = $class->get_subdir($scfg, 'images');
