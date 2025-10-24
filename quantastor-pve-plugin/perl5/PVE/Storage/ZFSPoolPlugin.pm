@@ -195,7 +195,7 @@ sub zfs_request {
 
 sub zfs_wait_for_zvol_link {
     my ($class, $scfg, $volname, $timeout) = @_;
-
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPoolPlugin.pm - zfs_wait_for_zvol_link - called with (volname: '$volname', timeout: '$timeout')");
     my $default_timeout = PVE::RPCEnvironment->is_worker() ? 60*5 : 10;
     $timeout = $default_timeout if !defined($timeout);
 
@@ -573,7 +573,7 @@ my sub dataset_mounted_heuristic {
 
 sub activate_storage {
     my ($class, $storeid, $scfg, $cache) = @_;
-
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPoolPlugin.pm - activate_storage called for storeid: $storeid");
     # Note: $scfg->{pool} can include dataset <pool>/<dataset>
     my $dataset = $scfg->{pool};
     my $pool = ($dataset =~ s!/.*$!!r);
@@ -609,7 +609,7 @@ sub deactivate_storage {
 
 sub activate_volume {
     my ($class, $storeid, $scfg, $volname, $snapname, $cache) = @_;
-
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPoolPlugin.pm - activate_volume called for volume: $volname");
     return 1 if defined($snapname);
 
     my (undef, $dataset, undef, undef, undef, undef, $format) = $class->parse_volname($volname);

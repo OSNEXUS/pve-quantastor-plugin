@@ -283,10 +283,15 @@ sub options {
 
 sub path {
     my ($class, $scfg, $volname, $storeid, $snapname) = @_;
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("$class - path - args: volname=$volname, snapname=$snapname, storeid=$storeid");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("$class - path - args: volname=$volname storeid=$storeid");
 
     die "direct access to snapshots not implemented"
 	if defined($snapname);
+
+    #if ($scfg->{iscsiprovider} eq 'quantastor') {
+    #    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - path - using quantastor iscsi provider");
+    #    return PVE::Storage::LunCmd::QuantaStorPlugin::qs_path($scfg, $volname, $storeid, $snapname);
+    #}
 
     my ($vtype, $name, $vmid) = $class->parse_volname($volname);
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - path - parsed volname: vtype=$vtype, name=$name, vmid=$vmid");
@@ -465,37 +470,21 @@ sub volume_has_feature {
 sub list_images {
     my ($class, $storeid, $scfg, $vmid, $vollist, $cache) = @_;
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - list_images - vmid: $vmid, storeid: $storeid host: $scfg->{qs_apiv4_host}");
-
     if ($scfg->{iscsiprovider} eq 'quantastor') {
         return PVE::Storage::LunCmd::QuantaStorPlugin::qs_list_images($class, $storeid, $scfg, $cache);
     }
-    #my $zfs_list = $class->zfs_list_zvol($scfg);
-#
-    #my $res = [];
-#
-    #for my $info (values $zfs_list->%*) {
-	#my $volname = $info->{name};
-	#my $parent = $info->{parent};
-	#my $owner = $info->{vmid};
-#
-	#if ($parent && $parent =~ m/^(\S+)\@__base__$/) {
-	#    my ($basename) = ($1);
-	#    $info->{volid} = "$storeid:$basename/$volname";
-	#} else {
-	#    $info->{volid} = "$storeid:$volname";
-	#}
-#
-	#if ($vollist) {
-	#    my $found = grep { $_ eq $info->{volid} } @$vollist;
-	#    next if !$found;
-	#} else {
-	#    next if defined ($vmid) && ($owner ne $vmid);
-	#}
-#
-	#push @$res, $info;
-    #}
-    
+
     return $class->SUPER::list_images($storeid, $scfg, $vmid, $vollist, $cache);
+}
+
+sub zfs_delete_zvol {
+    my ($class, $scfg, $zvol) = @_;
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPoolPlugin.pm - zfs_delete_zvol - called with (zvol: '$zvol')");
+    if ($scfg->{iscsiprovider} eq 'quantastor') {
+        return PVE::Storage::LunCmd::QuantaStorPlugin::qs_zfs_delete_zvol($scfg, $zvol);
+    }
+
+    die $class->SUPER::zfs_delete_zvol($scfg, $zvol);
 }
 
 sub activate_storage {

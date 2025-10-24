@@ -62,6 +62,8 @@ use PVE::QemuServer::PCI qw(print_pci_addr print_pcie_addr print_pcie_root_port 
 use PVE::QemuServer::QMPHelpers qw(qemu_deviceadd qemu_devicedel qemu_objectadd qemu_objectdel);
 use PVE::QemuServer::USB;
 
+use PVE::Storage::LunCmd::QuantaStorPlugin;
+
 my $have_sdn;
 eval {
     require PVE::Network::SDN::Zones;
@@ -3493,6 +3495,7 @@ my sub print_ovmf_drive_commandlines {
 sub config_to_command {
     my ($storecfg, $vmid, $conf, $defaults, $forcemachine, $forcecpu,
         $live_restore_backing) = @_;
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("QemuServer.pm - config_to_command called for VMID: $vmid");
 
     my ($globalFlags, $machineFlags, $rtcFlags) = ([], [], []);
     my $devices = [];
@@ -4113,7 +4116,7 @@ sub config_to_command {
 	my $aa = PVE::Tools::split_args($conf->{args});
 	push @$cmd, @$aa;
     }
-
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("QEMU command: " . join(' ', map { quotemeta($_) } @$cmd) . "\n");
     return wantarray ? ($cmd, $vollist, $spice_port, $pci_devices) : $cmd;
 }
 
@@ -5641,7 +5644,7 @@ sub vm_start {
 #       contained in config
 sub vm_start_nolock {
     my ($storecfg, $vmid, $conf, $params, $migrate_opts) = @_;
-
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("QemuServer.pm - vm_start_nolock - called for VMID: $vmid");
     my $statefile = $params->{statefile};
     my $resume = $params->{resume};
 
@@ -5700,6 +5703,7 @@ sub vm_start_nolock {
 
     my ($cmd, $vollist, $spice_port, $pci_devices) = config_to_command($storecfg, $vmid,
 	$conf, $defaults, $forcemachine, $forcecpu, $params->{'live-restore-backing'});
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("QemuServer.pm - command : $cmd");
 
     my $migration_ip;
     my $get_migration_ip = sub {

@@ -529,9 +529,9 @@ sub parse_volname {
 }
 
 sub parse_volume_id {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Storage.pm - parse_volume_id");
+    #PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Storage.pm - parse_volume_id");
     my ($volid, $noerr) = @_;
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Storage.pm - volid: $volid");
+    #PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Storage.pm - volid: $volid");
 
     return PVE::Storage::Plugin::parse_volume_id($volid, $noerr);
 }
@@ -1225,9 +1225,9 @@ sub activate_storage {
 	my ($baseid, undef) = parse_volume_id ($scfg->{base});
 	activate_storage($cfg, $baseid, $cache);
     }
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Storage.pm - scfg base: $scfg->{base}");
 
     if (! eval { $plugin->check_connection($storeid, $scfg) }) {
+        PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Storage.pm - connection check failed for storage '$storeid'");
 	die "connection check for storage '$storeid' failed - $@\n" if $@;
 	die "storage '$storeid' is not online\n";
     }
@@ -1253,6 +1253,7 @@ sub activate_storage_list {
     $cache = {} if !$cache;
 
     foreach my $storeid (@$storeid_list) {
+	PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Storage.pm - activate_storage_list - activating storeid: $storeid");
 	activate_storage($cfg, $storeid, $cache);
     }
 }
