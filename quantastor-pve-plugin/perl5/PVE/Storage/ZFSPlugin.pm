@@ -114,19 +114,11 @@ sub zfs_get_lu_name {
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - requesting object: $object");
     my $lu_name = $class->zfs_request($scfg, undef, 'list_lu', $object);
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - list_lu returned lu_name: $lu_name");
-    # this is where list_lu is called. It should return the lu_name (guid) if it exists.
 
     return $lu_name if $lu_name;
 
     die "Could not find lu_name for zvol $zvol";
 }
-
-# sub parse_volname {
-#     my ($class, $volname) = @_;
-#     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - parse_volname $volname");
-# 
-#     return ('images', undef, undef);
-# }
 
 sub zfs_add_lun_mapping_entry {
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_add_lun_mapping_entry");
@@ -288,10 +280,10 @@ sub path {
     die "direct access to snapshots not implemented"
 	if defined($snapname);
 
-    #if ($scfg->{iscsiprovider} eq 'quantastor') {
-    #    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - path - using quantastor iscsi provider");
-    #    return PVE::Storage::LunCmd::QuantaStorPlugin::qs_path($scfg, $volname, $storeid, $snapname);
-    #}
+    if ($scfg->{iscsiprovider} eq 'quantastor') {
+        PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - path - using quantastor iscsi provider");
+        return PVE::Storage::LunCmd::QuantaStorPlugin::qs_path($scfg, $volname, $storeid, $snapname);
+    }
 
     my ($vtype, $name, $vmid) = $class->parse_volname($volname);
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - path - parsed volname: vtype=$vtype, name=$name, vmid=$vmid");
