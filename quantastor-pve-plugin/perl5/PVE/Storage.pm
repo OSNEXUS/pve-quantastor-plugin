@@ -1049,7 +1049,6 @@ sub vdisk_alloc {
     activate_storage($cfg, $storeid);
 
     my $plugin = PVE::Storage::Plugin->lookup($scfg->{type});
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("Storage.pm - vdisk_alloc - alloc vdisk with vmid: $vmid, format: $fmt, name: $name, size: $size");
     # lock shared storage
     return $plugin->cluster_lock_storage($storeid, $scfg->{shared}, undef, sub {
 	my $old_umask = umask(umask|0037);

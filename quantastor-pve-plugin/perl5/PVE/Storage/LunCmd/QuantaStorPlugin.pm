@@ -42,7 +42,7 @@ sub qs_path {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_path called for volname: $volname");
 
     my ($vtype, $name, $vmid) = qs_parse_volname($volname);
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_path - parsed volname: vtype=$vtype, name=$name, vmid=$vmid");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_path - parsed volname: vtype=$vtype, name=$name, vmid=$vmid");
     #e.g. iscsi://10.0.26.215/iqn.2009-10.com.osnexus:7b6f4eb4-2f14af41e215fa3a:vm-100-disk-0/1
     my $path = "iscsi://$scfg->{portal}/";
     my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
@@ -59,7 +59,7 @@ sub qs_path {
 
 sub qs_parse_volname {
     my ($volname) = @_;
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStor.pm - qs_parse_volname $volname");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_parse_volname $volname");
 
     if ($volname =~ m/^(((base|basevol)-(\d+)-\S+)\/)?((base|basevol|vm|subvol)-(\d+)-\S+)$/) {
 	my $format = ($6 eq 'subvol' || $6 eq 'basevol') ? 'subvol' : 'raw';
@@ -714,7 +714,7 @@ sub activate_storage {
 }
 
 sub qs_list_images {
-    my ($class, $storeid, $scfg, $vmid, $vollist, $cache) = @_;
+    my ($storeid, $scfg, $vmid, $vollist, $cache) = @_;
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_list_images - vmid: $vmid, storeid: $storeid host: $scfg->{qs_apiv4_host}");
     my $res = [];
 
@@ -809,7 +809,7 @@ sub qs_zfs_parse_zvol_list {
 
 sub qs_zfs_delete_zvol {
     my ($scfg, $zvol) = @_;
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPoolPlugin.pm - zfs_delete_zvol - called with (zvol: '$zvol')");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - zfs_delete_zvol - called with (zvol: '$zvol')");
 
     my $err;
     # Get the zvol name from the full path
@@ -837,6 +837,20 @@ sub qs_zfs_delete_zvol {
 
 
     die $err if $err;
+}
+
+sub qs_get_zvol_id_by_name {
+    my ($scfg, $zvol_name) = @_;
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_get_zvol_id_by_name - called with (zvol_name: '$zvol_name')");
+
+    my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $zvol_name);
+
+    return $res_vol_get->{id};
 }
 
 1;

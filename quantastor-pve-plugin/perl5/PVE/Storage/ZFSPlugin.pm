@@ -463,7 +463,7 @@ sub list_images {
     my ($class, $storeid, $scfg, $vmid, $vollist, $cache) = @_;
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - list_images - vmid: $vmid, storeid: $storeid host: $scfg->{qs_apiv4_host}");
     if ($scfg->{iscsiprovider} eq 'quantastor') {
-        return PVE::Storage::LunCmd::QuantaStorPlugin::qs_list_images($class, $storeid, $scfg, $cache);
+        return PVE::Storage::LunCmd::QuantaStorPlugin::qs_list_images($storeid, $scfg, $vmid, $vollist, $cache);
     }
 
     return $class->SUPER::list_images($storeid, $scfg, $vmid, $vollist, $cache);
@@ -477,6 +477,24 @@ sub zfs_delete_zvol {
     }
 
     die $class->SUPER::zfs_delete_zvol($scfg, $zvol);
+}
+
+sub zfs_get_properties {
+    my ($class, $scfg, $properties, $dataset, $timeout) = @_;
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_get_properties - called dataset $dataset");
+    if ($scfg->{iscsiprovider} eq 'quantastor') {
+        my $tmp = $dataset;
+        if ($tmp =~ m{^([^/]+)/([^/]+)$}) {
+            # Pool + Volume ID is the correct path for QuantaStor zvols
+            my $pool = $1;
+            my $vol  = $2;
+            my $vol_id = PVE::Storage::LunCmd::QuantaStorPlugin::qs_get_zvol_id_by_name($scfg, $vol);
+            $dataset = "$pool/$vol_id";
+            PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_get_properties - modified dataset to $dataset");
+        }
+    }
+
+    return $class->SUPER::zfs_get_properties($scfg, $properties, $dataset, $timeout);
 }
 
 sub activate_storage {
