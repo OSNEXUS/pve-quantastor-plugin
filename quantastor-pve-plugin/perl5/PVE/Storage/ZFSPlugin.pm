@@ -311,6 +311,10 @@ sub create_base {
     my ($vtype, $name, $vmid, $basename, $basevmid, $isBase) =
         $class->parse_volname($volname);
 
+    if ($scfg->{iscsiprovider} eq 'quantastor') {
+        return PVE::Storage::LunCmd::QuantaStorPlugin::qs_create_base($storeid, $scfg, $basename, $name);
+    }
+
     die "create_base not possible with base image\n" if $isBase;
 
     my $newname = $name;
@@ -318,6 +322,7 @@ sub create_base {
 
     my $newvolname = $basename ? "$basename/$newname" : "$newname";
 
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - deleting existing LU for $name");
     $class->zfs_delete_lu($scfg, $name);
     $class->zfs_request($scfg, undef, 'rename', "$scfg->{pool}/$name", "$scfg->{pool}/$newname");
 
@@ -332,8 +337,12 @@ sub create_base {
 }
 
 sub clone_image {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - clone_image");
     my ($class, $scfg, $storeid, $volname, $vmid, $snap) = @_;
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - clone_image storeid: $storeid, volname: $volname, vmid: $vmid");
+
+    if ($scfg->{iscsiprovider} eq 'quantastor') {
+        return PVE::Storage::LunCmd::QuantaStorPlugin::qs_clone_image($scfg, $storeid, $volname, $vmid, $snap);
+    }
 
     my $name = $class->SUPER::clone_image($scfg, $storeid, $volname, $vmid, $snap);
 
@@ -349,7 +358,7 @@ sub clone_image {
 sub alloc_image {
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - alloc_image");
     my ($class, $storeid, $scfg, $vmid, $fmt, $name, $size) = @_;
-    
+
     die "unsupported format '$fmt'" if $fmt ne 'raw';
 
     die "illegal name '$name' - should be 'vm-$vmid-*'\n"

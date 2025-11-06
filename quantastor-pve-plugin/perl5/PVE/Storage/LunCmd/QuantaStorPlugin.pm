@@ -15,6 +15,9 @@ use HTTP::Request;
 use MIME::Base64;
 use JSON;
 
+use PVE::Storage::Plugin;
+our $MAX_VOLUMES_PER_GUEST = 1024;
+
 sub qs_write_to_log {
     my ($msg) = @_;
 
@@ -175,12 +178,11 @@ sub qs_storage_volume_create {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_create $name $size $pool");
 
     my $api_name = 'storageVolumeCreate';
-    my $trim_pool_name = $pool;
-    $trim_pool_name =~ s/^qs-//;
     my $query_params = {
         name => $name,
         size => $size * 1024,
-        provisionableId => $trim_pool_name
+        provisionableId => $pool,
+        description => 'Created by Proxmox VE Plugin'
     };
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
@@ -198,9 +200,10 @@ sub qs_storage_volume_delete {
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume) = @_;
     # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
-    my $api_name = 'storageVolumeDeleteEx';
+    my $api_name = 'storageVolumeDelete';
     my $query_params = {
-        storageVolume => $storageVolume,
+        storageVolumeList => $storageVolume,
+        deleteOptions => 4, # delete parent and snaps
         flags => 2 # Force delete
     };
 
@@ -210,6 +213,71 @@ sub qs_storage_volume_delete {
     my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_delete - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+sub qs_storage_volume_modify {
+    my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $newName) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_modify $newName");
+
+    my $api_name = 'storageVolumeModify';
+    my $query_params = {
+        storageVolume => $storageVolume,
+        newName => $newName,
+    };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_modify - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+sub qs_storage_volume_snapshot {
+    my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $snapshotName) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_snapshot $storageVolume snapshot name: $snapshotName");
+
+    my $api_name = 'storageVolumeSnapshot';
+    my $query_params = {
+        storageVolume => $storageVolume,
+        snapshotName => $snapshotName,
+        description => 'Snapshot created by Proxmox VE Plugin'
+    };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_snapshot - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+sub qs_storage_volume_clone {
+    my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $cloneName) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_clone $storageVolume clone name: $cloneName");
+
+    my $api_name = 'storageVolumeClone';
+    my $query_params = {
+        storageVolume => $storageVolume,
+        cloneName => $cloneName,
+        description => 'Clone created by Proxmox VE Plugin'
+    };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_clone - Response:\n$pretty_result\n");
 
     return $response;
 }
@@ -623,7 +691,9 @@ sub qs_zfs_create_zvol {
 
     # run qs storageVolumeCreate API
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_create_zvol - creating zvol: $zvol with size: $size, pool: $scfg->{pool}");
-    my $create_response = qs_storage_volume_create($scfg->{qs_apiv4_host}, $scfg->{qs_username}, $scfg->{qs_password}, '', 300, $zvol, $size, $scfg->{pool});
+    my $trim_pool_name = $scfg->{pool};
+    $trim_pool_name =~ s/^qs-//;
+    my $create_response = qs_storage_volume_create($scfg->{qs_apiv4_host}, $scfg->{qs_username}, $scfg->{qs_password}, '', 300, $zvol, $size, $trim_pool_name);
 }
 
 sub get_initiator_name {
@@ -851,6 +921,226 @@ sub qs_get_zvol_id_by_name {
                                             $zvol_name);
 
     return $res_vol_get->{id};
+}
+
+sub qs_create_base {
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base");
+    my ($storeid, $scfg, $basename, $volname) = @_;
+
+    my $newname = $volname;
+    $newname =~ s/^vm-/base-/;
+
+    # get the storage volume info from quantastor
+    # verify the zvol exists.
+    my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $volname);
+
+    # logout of iscsi targets before renaming
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - logging out of $volname iqn $res_vol_get->{iqn}");
+    my $res_logout = qs_iscsi_target_logout($scfg, $res_vol_get->{iqn});
+
+    # remove storage volume acl entry for local host
+    my $local_host_iqn = get_initiator_name();
+    my $res_host_get = qs_host_get($scfg->{qs_apiv4_host},
+                                   $scfg->{qs_username},
+                                   $scfg->{qs_password},
+                                   '',
+                                   300,
+                                   $local_host_iqn);
+
+    my $res_host_acl_remove = qs_storage_volume_acl_remove($scfg->{qs_apiv4_host},
+                                                            $scfg->{qs_username},
+                                                            $scfg->{qs_password},
+                                                            '',
+                                                            300,
+                                                            $res_vol_get->{id},
+                                                            $res_host_get->{id});
+
+    # modify the volname of the volume via qs API
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - modifying volume name from $volname to $newname");
+    my $res_volume_modify = qs_storage_volume_modify($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $res_vol_get->{id},
+                                            $newname);
+
+    # add storage volume acl entry for local host
+    my $res_host_acl_add = qs_storage_volume_acl_add($scfg->{qs_apiv4_host},
+                                                     $scfg->{qs_username},
+                                                     $scfg->{qs_password},
+                                                     '',
+                                                     300,
+                                                     $res_vol_get->{id},
+                                                     $local_host_iqn);
+
+    # login to modified iscsi target
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - logging in to $newname iqn $res_volume_modify->{iqn}");
+    my $res_login = qs_iscsi_target_login($scfg, $res_volume_modify->{obj}{iqn});
+
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - taking snapshot of new base volume $newname");
+    my $res_volume_snapshot = qs_storage_volume_snapshot($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $newname,
+                                            "template-$newname");
+
+    my $newvolname = $basename ? "$basename/$newname" : "$newname";
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - returning new volume name: $newvolname");
+
+    # take a snap shot of the new base volume
+
+#    my $snap = '__base__';
+#
+#    my ($vtype, $name, $vmid, $basename, $basevmid, $isBase) =
+#        $class->parse_volname($volname);
+#
+#    die "create_base not possible with base image\n" if $isBase;
+#
+#    my $newname = $name;
+#    $newname =~ s/^vm-/base-/;
+#
+#    my $newvolname = $basename ? "$basename/$newname" : "$newname";
+#
+#    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - deleting existing LU for $name");
+#    $class->zfs_delete_lu($scfg, $name);
+#    $class->zfs_request($scfg, undef, 'rename', "$scfg->{pool}/$name", "$scfg->{pool}/$newname");
+#
+#    my $guid = $class->zfs_create_lu($scfg, $newname);
+#    $class->zfs_add_lun_mapping_entry($scfg, $newname, $guid);
+#
+#    my $running  = undef; #fixme : is create_base always offline ?
+#
+#    $class->volume_snapshot($scfg, $storeid, $newname, $snap, $running);
+
+    return $newvolname;
+}
+
+sub qs_clone_image {
+    my ($scfg, $storeid, $volname, $vmid, $snap) = @_;
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_clone_image - called with (volname: '$volname', vmid: '$vmid')");
+
+    my ($vtype, $basename, $basevmid, undef, undef, $isBase, $format) =
+        qs_parse_volname($volname);
+    die "clone_image only works on base images\n" if !$isBase;
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_clone_image - basename: $basename basevmid: $basevmid");
+
+    my $srcvolname = "template-$basename";
+
+    my $name = qs_find_free_diskname($storeid, $scfg, $vmid, $format);
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_clone_image - $name is the new disk name");
+    # get the storage volume info from quantastor
+    # verify the zvol exists.
+    my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $srcvolname);
+
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_clone_image - cloning snapshot $srcvolname to new volume $name");
+    my $res_volume_clone = qs_storage_volume_clone($scfg->{qs_apiv4_host},
+                                                   $scfg->{qs_username},
+                                                   $scfg->{qs_password},
+                                                   '',
+                                                   300,
+                                                   $srcvolname,
+                                                   $name);
+
+    # add storage volume acl entry for local host
+    my $local_host_iqn = get_initiator_name();
+    my $res_host_get = qs_host_get($scfg->{qs_apiv4_host},
+                                   $scfg->{qs_username},
+                                   $scfg->{qs_password},
+                                   '',
+                                   300,
+                                   $local_host_iqn);
+
+    my $res_host_acl_add = qs_storage_volume_acl_add($scfg->{qs_apiv4_host},
+                                                     $scfg->{qs_username},
+                                                     $scfg->{qs_password},
+                                                     '',
+                                                     300,
+                                                     $res_volume_clone->{obj}{id},
+                                                     $local_host_iqn);
+
+    # need to perform iscsi target login here
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_clone_image - logging in to $name iqn $res_volume_clone->{obj}{iqn}");
+    my $res_login = qs_iscsi_target_login($scfg, $res_volume_clone->{obj}{iqn});
+
+    #$snap ||= '__base__';
+    #my ($vtype, $basename, $basevmid, undef, undef, $isBase, $format) =
+    #    $class->parse_volname($volname);
+    #die "clone_image only works on base images\n" if !$isBase;
+    #my $name = $class->find_free_diskname($storeid, $scfg, $vmid, $format);
+    #if ($format eq 'subvol') {
+	#my $size = $class->zfs_request($scfg, undef, 'list', '-Hp', '-o', 'refquota', "$scfg->{pool}/$basename");
+	#chomp($size);
+	#$class->zfs_request($scfg, undef, 'clone', "$scfg->{pool}/$basename\@$snap", "$scfg->{pool}/$name", '-o', "refquota=$size");
+    #} else {
+	#$class->zfs_request($scfg, undef, 'clone', "$scfg->{pool}/$basename\@$snap", "$scfg->{pool}/$name");
+    #}
+    #return "$basename/$name";
+
+    return "$name";
+}
+
+sub qs_get_next_vm_diskname {
+    my ($disk_list, $storeid, $vmid, $fmt, $scfg, $add_fmt_suffix) = @_;
+
+    $fmt //= '';
+    my $prefix = ($fmt eq 'subvol') ? 'subvol' : 'vm';
+    my $suffix = $add_fmt_suffix ? ".$fmt" : '';
+
+    my $disk_ids = {};
+    foreach my $disk (@$disk_list) {
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_get_next_vm_diskname - processing existing disk: $disk for vmid: $vmid");
+	my $disknum = qs_get_vm_disk_number($disk, $vmid);
+	$disk_ids->{$disknum} = 1 if defined($disknum);
+    }
+
+    for (my $i = 0; $i < $MAX_VOLUMES_PER_GUEST; $i++) {
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_get_next_vm_diskname - checking disk number: $i for vmid: $vmid");
+	if (!$disk_ids->{$i}) {
+	    return "$prefix-$vmid-disk-$i$suffix";
+	}
+    }
+
+    die "unable to allocate an image name for VM $vmid in storage '$storeid'\n"
+}
+
+sub qs_get_vm_disk_number {
+    my ($disk_name, $vmid) = @_;
+
+    # Strip common prefixes like "storeid:" or "dataset/"
+    # Examples:
+    #   qs-storage:vm-102-disk-0   -> vm-102-disk-0
+    #   qs-uuid/vm-102-disk-0      -> vm-102-disk-0
+    $disk_name =~ s/^[^:\/]+[:\/]//;
+
+    # Match standard Proxmox volume naming patterns
+    if ($disk_name =~ m/^(vm|base|subvol|basevol)-$vmid-disk-(\d+)/) {
+        return $2;
+    }
+
+    return undef;
+}
+
+sub qs_find_free_diskname {
+    my ($storeid, $scfg, $vmid, $fmt, $add_fmt_suffix) = @_;
+
+    my $disks = qs_list_images($storeid, $scfg, $vmid);
+
+    my $disk_list = [ map { $_->{volid} } @$disks ];
+
+    return qs_get_next_vm_diskname($disk_list, $storeid, $vmid, $fmt, $scfg, $add_fmt_suffix);
 }
 
 1;

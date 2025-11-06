@@ -60073,9 +60073,9 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 	    vm.set('isLIO', newVal === 'LIO');
 	    vm.set('isComstar', newVal === 'comstar');
 		vm.set('isQuantaStor', newVal === "quantastor");
-		vm.set('hasWriteCacheOption', newVal === 'comstar' || newVal === 'quantastor' || newVal === 'istgt')
+		vm.set('hasWriteCacheOption', newVal === 'comstar' || newVal === 'istgt')
 		if (newVal !== 'quantastor') {
-			me.lookupReference('qs_use_ssl_field').setValue(false);
+			me.lookupReference('qs_use_ssl_field').setValue(true);
 			me.lookupReference('qs_apiv4_host_field').setValue('');
 			me.lookupReference('qs_user_field').setValue('');
 			me.lookupReference('qs_password_field').setValue('');
@@ -60148,7 +60148,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 		name: 'qs_use_ssl',
 		reference: 'qs_use_ssl_field',
 		inputId: 'qs_use_ssl_field',
-		checked: false,
+		checked: true,
 		bind: { hidden: '{!isQuantaStor}' },
 		uncheckedValue: 0,
 		fieldLabel: gettext('API use SSL')
@@ -60179,6 +60179,9 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 		checked: false,
 		uncheckedValue: 0,
 		fieldLabel: gettext('Thin provision'),
+		bind: {
+    	    value: '{isQuantaStor}', // automatically reflect changes
+    	},
 	    },
 	    {
 		xtype: 'proxmoxcheckbox',
