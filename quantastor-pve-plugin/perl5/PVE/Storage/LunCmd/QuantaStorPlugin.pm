@@ -115,9 +115,6 @@ sub qs_api_call {
     # Add headers
     $ua->default_header('Accept' => 'application/json');
     $ua->credentials("$server_ip:8153", "Proxmox API", $username, $password);
-
-    # Prepare HTTP GET request
-    # print "URL: $url\n";
     my $response = $ua->get($url);
 
     # Check response status
@@ -125,8 +122,8 @@ sub qs_api_call {
         return decode_json($response->decoded_content); # Return raw Perl data structure
     } else {
         qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_call - HTTP GET Request failed: " . $response->status_line);
-        print "Response content: " . $response->decoded_content . "\n";
-        print "HTTP GET Request failed: " . $response->status_line;
+        qs_write_to_log("Response content: " . $response->decoded_content . "\n");
+        qs_write_to_log("HTTP GET Request failed: " . $response->status_line);
         return '';
     }
 
@@ -135,7 +132,6 @@ sub qs_api_call {
 
 sub qs_storage_volume_enum {
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolumeList) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_enum, storageVolumeList: $storageVolumeList");
 
     my $api_name = 'storageVolumeEnum';
@@ -210,9 +206,9 @@ sub qs_storage_volume_delete {
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
     # Prettify the response for output
-    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_delete - Response:\n$pretty_result\n");
+    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_delete - Response:\n$pretty_result\n");
 
     return $response;
 }
@@ -226,14 +222,15 @@ sub qs_storage_volume_modify {
     my $query_params = {
         storageVolume => $storageVolume,
         newName => $newName,
+        description => 'Modified by Proxmox VE Plugin'
     };
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
     # Prettify the response for output
-    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_modify - Response:\n$pretty_result\n");
+    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_modify - Response:\n$pretty_result\n");
 
     return $response;
 }
@@ -253,9 +250,40 @@ sub qs_storage_volume_snapshot {
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
     # Prettify the response for output
+    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_snapshot - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
+#// @doc Roll Storage Volume back from the most recent snapshot.
+#int osn__storageVolumeRollback(
+#    /*in*/ xsd__string storageVolume,  //@doc Name or UUID of the Storage Volume
+#    /*in*/ xsd__string snapshotVolume, //@doc Snapshot Name or UUID to roll back the Storage Volume from. Needs to be the most recent snapshot
+#    /*in*/ xsd__unsignedInt flags,
+#    /*out*/ struct osn__storageVolumeRollbackResponse {
+#        osn__task task;
+#        osn__storageVolume obj;
+#    } & r);
+
+sub qs_storage_volume_rollback {
+    my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $snapshotVolume) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_rollback $storageVolume snapshot name: $snapshotVolume");
+
+    my $api_name = 'storageVolumeRollback';
+    my $query_params = {
+        storageVolume => $storageVolume,
+        snapshotVolume => $snapshotVolume,
+    };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
     my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_snapshot - Response:\n$pretty_result\n");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_rollback - Response:\n$pretty_result\n");
 
     return $response;
 }
@@ -275,9 +303,9 @@ sub qs_storage_volume_clone {
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
     # Prettify the response for output
-    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_clone - Response:\n$pretty_result\n");
+    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_clone - Response:\n$pretty_result\n");
 
     return $response;
 }
@@ -293,9 +321,9 @@ sub qs_storage_volume_acl_add {
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
     # Prettify the response for output
-    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_add - Response:\n$pretty_result\n");
+    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_add - Response:\n$pretty_result\n");
 
     return $response;
 }
@@ -311,9 +339,9 @@ sub qs_storage_volume_acl_remove {
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
     # Prettify the response for output
-    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_remove - Response:\n$pretty_result\n");
+    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_remove - Response:\n$pretty_result\n");
 
     return $response;
 }
@@ -336,6 +364,24 @@ sub qs_storage_volume_utilization_enum {
     return $response;
 }
 
+sub qs_storage_volume_session_enum {
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_session_enum");
+    my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+
+    my $api_name = 'sessionEnum';
+    my $query_params = { storageVolume => $storageVolume };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_session_enum - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
 sub qs_host_add {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_add");
     my ($server_ip, $username, $password, $cert_path, $timeout, $hostname, $ipAddress, $param_username, $param_password,
@@ -349,9 +395,9 @@ sub qs_host_add {
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
     # Prettify the response for output
-    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_add - Response:\n$pretty_result\n");
+    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_add - Response:\n$pretty_result\n");
 
     return $response;
 }
@@ -995,31 +1041,6 @@ sub qs_create_base {
     my $newvolname = $basename ? "$basename/$newname" : "$newname";
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - returning new volume name: $newvolname");
 
-    # take a snap shot of the new base volume
-
-#    my $snap = '__base__';
-#
-#    my ($vtype, $name, $vmid, $basename, $basevmid, $isBase) =
-#        $class->parse_volname($volname);
-#
-#    die "create_base not possible with base image\n" if $isBase;
-#
-#    my $newname = $name;
-#    $newname =~ s/^vm-/base-/;
-#
-#    my $newvolname = $basename ? "$basename/$newname" : "$newname";
-#
-#    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - deleting existing LU for $name");
-#    $class->zfs_delete_lu($scfg, $name);
-#    $class->zfs_request($scfg, undef, 'rename', "$scfg->{pool}/$name", "$scfg->{pool}/$newname");
-#
-#    my $guid = $class->zfs_create_lu($scfg, $newname);
-#    $class->zfs_add_lun_mapping_entry($scfg, $newname, $guid);
-#
-#    my $running  = undef; #fixme : is create_base always offline ?
-#
-#    $class->volume_snapshot($scfg, $storeid, $newname, $snap, $running);
-
     return $newvolname;
 }
 
@@ -1075,20 +1096,6 @@ sub qs_clone_image {
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_clone_image - logging in to $name iqn $res_volume_clone->{obj}{iqn}");
     my $res_login = qs_iscsi_target_login($scfg, $res_volume_clone->{obj}{iqn});
 
-    #$snap ||= '__base__';
-    #my ($vtype, $basename, $basevmid, undef, undef, $isBase, $format) =
-    #    $class->parse_volname($volname);
-    #die "clone_image only works on base images\n" if !$isBase;
-    #my $name = $class->find_free_diskname($storeid, $scfg, $vmid, $format);
-    #if ($format eq 'subvol') {
-	#my $size = $class->zfs_request($scfg, undef, 'list', '-Hp', '-o', 'refquota', "$scfg->{pool}/$basename");
-	#chomp($size);
-	#$class->zfs_request($scfg, undef, 'clone', "$scfg->{pool}/$basename\@$snap", "$scfg->{pool}/$name", '-o', "refquota=$size");
-    #} else {
-	#$class->zfs_request($scfg, undef, 'clone', "$scfg->{pool}/$basename\@$snap", "$scfg->{pool}/$name");
-    #}
-    #return "$basename/$name";
-
     return "$name";
 }
 
@@ -1142,5 +1149,180 @@ sub qs_find_free_diskname {
 
     return qs_get_next_vm_diskname($disk_list, $storeid, $vmid, $fmt, $scfg, $add_fmt_suffix);
 }
+
+sub qs_volume_snapshot {
+    my ($scfg, $storeid, $volname, $snap) = @_;
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_volume_snapshot - called with (volname: '$volname')");
+
+    my $vname = (qs_parse_volname($volname))[1];
+    my $snap_name = $vname . "_$snap";
+
+    my $res_volume_snapshot = qs_storage_volume_snapshot($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $vname,
+                                            $snap_name);
+}
+
+sub qs_volume_snapshot_delete {
+    my ($scfg, $storeid, $volname, $snap, $running) = @_;
+
+    my $vname = (qs_parse_volname($volname))[1];
+    my $snap_name = $vname . "_$snap";
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_volume_snapshot_delete - called with (snap_name: '$snap_name')");
+
+    my $res_volume_snapshot_delete = qs_storage_volume_delete($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $snap_name);
+}
+
+sub qs_volume_snapshot_rollback {
+    my ($scfg, $storeid, $volname, $snap) = @_;
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_volume_snapshot_rollback - called with (volname: '$volname')");
+    my $vname = (qs_parse_volname($volname))[1];
+    my $snap_name = $vname . "_$snap";
+
+    # logout of iscsi target
+    my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $vname);
+
+    my $res_logout = qs_iscsi_target_logout($scfg, $res_vol_get->{iqn});
+    wait_for_volume_logout($scfg, $res_vol_get->{id});
+
+    # run rollback
+    my $res_volume_rollback = qs_storage_volume_rollback($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $res_vol_get->{id},
+                                            $snap_name);
+
+
+    # login to iscsi target
+    my $res_login = qs_iscsi_target_login($scfg, 60, $res_vol_get->{iqn});
+
+
+
+    #$volname = ($class->parse_volname($volname))[1];
+
+    #$class->zfs_delete_lu($scfg, $volname);
+
+    #$class->zfs_request($scfg, undef, 'rollback', "$scfg->{pool}/$volname\@$snap");
+
+    #$class->zfs_import_lu($scfg, $volname);
+
+    #$class->zfs_add_lun_mapping_entry($scfg, $volname);
+}
+
+sub wait_for_volume_logout {
+    my ($scfg, $storageVolume, $max_wait) = @_;
+    $max_wait //= 60;  # default 60 seconds
+    my $interval = 2;
+    my $elapsed = 0;
+
+    qs_write_to_log("Waiting for all sessions to log out for storage volume '$storageVolume'...");
+
+    while ($elapsed < $max_wait) {
+        my $response = qs_storage_volume_session_enum(
+            $scfg->{qs_apiv4_host},
+            $scfg->{qs_username},
+            $scfg->{qs_password},
+            '',
+            30,
+            $storageVolume
+        );
+
+        # Handle undefined response
+        unless (defined $response) {
+            qs_write_to_log("Invalid response or API call failed during sessionEnum.");
+            sleep($interval);
+            $elapsed += $interval;
+            next;
+        }
+
+        # Determine the session list
+        my $sessions;
+        if (ref $response eq 'ARRAY') {
+            $sessions = $response;
+        } elsif (ref $response eq 'HASH') {
+            $sessions = $response->{result} // $response->{sessions} // [];
+        } else {
+            $sessions = [];
+        }
+
+        my $session_count = ref $sessions eq 'ARRAY' ? scalar(@$sessions) : 0;
+
+        if ($session_count == 0) {
+            qs_write_to_log("All iSCSI sessions for volume '$storageVolume' are logged out.");
+            return 1;
+        }
+
+        qs_write_to_log("Still waiting... $session_count active session(s) remain.");
+        sleep($interval);
+        $elapsed += $interval;
+    }
+
+    qs_write_to_log("Timeout waiting for volume '$storageVolume' sessions to log out after $max_wait seconds.");
+    return 0;
+}
+
+sub qs_volume_rollback_is_possible {
+    my ($scfg, $storeid, $volname, $snap, $blockers) = @_;
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_volume_rollback_is_possible - called with (volname: '$volname', snap: '$snap')");
+    my $vname = (qs_parse_volname($volname))[1];
+    my $snap_name = $vname . "_$snap";
+
+    # check to see if this snapshot exists on the qs host
+    my $res_volume_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $snap_name);
+
+    if (!defined($res_volume_get->{id})) {
+        die "can't rollback, snapshot '$snap' does not exist on '$volname'\n";
+    }
+
+    # can't use '-S creation', because zfs list won't reverse the order when the
+    # creation time is the same second, breaking at least our tests.
+    #my $snapshots = $class->zfs_get_sorted_snapshot_list($scfg, $volname, ['-s', 'creation']);
+
+    #my $found;
+    #$blockers //= []; # not guaranteed to be set by caller
+    #for my $snapshot ($snapshots->@*) {
+	#if ($snapshot eq $snap) {
+	#    $found = 1;
+	#} elsif ($found) {
+	#    push $blockers->@*, $snapshot;
+	#}
+    #}
+
+    #my $volid = "${storeid}:${volname}";
+
+    #die "can't rollback, snapshot '$snap' does not exist on '$volid'\n"
+	#if !$found;
+
+    #die "can't rollback, '$snap' is not most recent snapshot on '$volid'\n"
+	#if scalar($blockers->@*) > 0;
+
+    #return 1;
+
+    return 1;
+}
+
+
+
+
 
 1;

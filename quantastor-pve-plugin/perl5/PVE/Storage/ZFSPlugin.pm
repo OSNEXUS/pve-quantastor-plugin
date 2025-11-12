@@ -412,6 +412,10 @@ sub volume_resize {
 sub volume_snapshot_delete {
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - volume_snapshot_delete");
     my ($class, $scfg, $storeid, $volname, $snap, $running) = @_;
+    if ($scfg->{iscsiprovider} eq 'quantastor') {
+        PVE::Storage::LunCmd::QuantaStorPlugin::qs_volume_snapshot_delete($scfg, $storeid, $volname, $snap, $running);
+        return;
+    }
 
     $volname = ($class->parse_volname($volname))[1];
 
@@ -421,6 +425,10 @@ sub volume_snapshot_delete {
 sub volume_snapshot_rollback {
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - volume_snapshot_rollback");
     my ($class, $scfg, $storeid, $volname, $snap) = @_;
+    if ($scfg->{iscsiprovider} eq 'quantastor') {
+        PVE::Storage::LunCmd::QuantaStorPlugin::qs_volume_snapshot_rollback($scfg, $storeid, $volname, $snap);
+        return;
+    }
 
     $volname = ($class->parse_volname($volname))[1];
 
@@ -431,6 +439,15 @@ sub volume_snapshot_rollback {
     $class->zfs_import_lu($scfg, $volname);
 
     $class->zfs_add_lun_mapping_entry($scfg, $volname);
+}
+
+sub volume_snapshot {
+    my ($class, $scfg, $storeid, $volname, $snap) = @_;
+    if ($scfg->{iscsiprovider} eq 'quantastor') {
+        PVE::Storage::LunCmd::QuantaStorPlugin::qs_volume_snapshot($scfg, $storeid, $volname, $snap);
+        return;
+    }
+    $class->SUPER::volume_snapshot($scfg, $storeid, $volname, $snap);
 }
 
 sub storage_can_replicate {
@@ -504,6 +521,16 @@ sub zfs_get_properties {
     }
 
     return $class->SUPER::zfs_get_properties($scfg, $properties, $dataset, $timeout);
+}
+
+sub volume_rollback_is_possible {
+    my ($class, $scfg, $storeid, $volname, $snap, $blockers) = @_;
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - volume_rollback_is_possible - called with (volname: '$volname', snap: '$snap')");
+    if ($scfg->{iscsiprovider} eq 'quantastor') {
+        return PVE::Storage::LunCmd::QuantaStorPlugin::qs_volume_rollback_is_possible($scfg, $storeid, $volname, $snap, $blockers);
+    }
+
+    return $class->SUPER::volume_rollback_is_possible($scfg, $storeid, $volname, $snap, $blockers);
 }
 
 sub activate_storage {
