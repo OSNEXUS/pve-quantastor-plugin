@@ -458,7 +458,6 @@ sub storage_can_replicate {
 }
 
 sub volume_has_feature {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - volume_has_feature");
     my ($class, $scfg, $feature, $storeid, $volname, $snapname, $running) = @_;
 
     my $features = {

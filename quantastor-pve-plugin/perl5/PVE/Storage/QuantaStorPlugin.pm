@@ -602,7 +602,6 @@ sub on_add_hook {
     my $iqn = get_initiator_name();
     my $hostname = hostname() . "-proxmox-host";   # fix: use concatenation, not '+'
     my $description = "Host added by Proxmox PVE QuantaStor plug-in.";
-    print "Hostname: $hostname, Initiator: $iqn\n";
 
     # Step 1: try to fetch the host
     my $res_host_get = qs_host_get($scfg->{server}, $scfg->{username}, $scfg->{password}, '', 300, $iqn);
@@ -752,7 +751,6 @@ sub on_delete_hook {
 
 sub parse_volname {
     my ($class, $volname) = @_;
-    qs_write_to_log("Plugin.pm - parse_volname $volname");
 
     return ('images', undef, undef);
 }

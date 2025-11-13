@@ -19,7 +19,6 @@ use PVE::Storage::LunCmd::QuantaStorPlugin;
 # NFS helper functions
 
 sub nfs_is_mounted {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - nfs_is_mounted");
     my ($server, $export, $mountpoint, $mountdata) = @_;
 
     $server = "[$server]" if Net::IP::ip_is_ipv6($server);
@@ -35,7 +34,6 @@ sub nfs_is_mounted {
 }
 
 sub nfs_mount {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - nfs_mount");
     my ($server, $export, $mountpoint, $options) = @_;
 
     $server = "[$server]" if Net::IP::ip_is_ipv6($server);
@@ -52,12 +50,10 @@ sub nfs_mount {
 # Configuration
 
 sub type {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - type");
     return 'nfs';
 }
 
 sub plugindata {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - plugindata");
     return {
 	content => [ { images => 1, rootdir => 1, vztmpl => 1, iso => 1, backup => 1, snippets => 1 },
 		     { images => 1 }],
@@ -66,7 +62,6 @@ sub plugindata {
 }   
 
 sub properties {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - properties");
     return {
 	export => {
 	    description => "NFS export path.",
@@ -80,7 +75,6 @@ sub properties {
 }
 
 sub options {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - options");
     return {
 	path => { fixed => 1 },
 	'content-dirs' => { optional => 1 },
@@ -104,7 +98,6 @@ sub options {
 
 
 sub check_config {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - check_config");
     my ($class, $sectionId, $config, $create, $skipSchemaCheck) = @_;
 
     $config->{path} = "/mnt/pve/$sectionId" if $create && !$config->{path};
@@ -115,7 +108,6 @@ sub check_config {
 # Storage implementation
 
 sub status {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - status");
     my ($class, $storeid, $scfg, $cache) = @_;
 
     $cache->{mountdata} = PVE::ProcFSTools::parse_proc_mounts()
@@ -131,7 +123,6 @@ sub status {
 }
 
 sub activate_storage {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - activate_storage");
     my ($class, $storeid, $scfg, $cache) = @_;
 
     $cache->{mountdata} = PVE::ProcFSTools::parse_proc_mounts()
@@ -155,7 +146,6 @@ sub activate_storage {
 }
 
 sub deactivate_storage {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - deactivate_storage");
     my ($class, $storeid, $scfg, $cache) = @_;
 
     $cache->{mountdata} = PVE::ProcFSTools::parse_proc_mounts()
@@ -172,7 +162,6 @@ sub deactivate_storage {
 }
 
 sub check_connection {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - check_connection");
     my ($class, $storeid, $scfg) = @_;
 
     my $server = $scfg->{server};
@@ -217,7 +206,6 @@ sub check_connection {
 # FIXME remove on the next APIAGE reset.
 # Deprecated, use get_volume_attribute instead.
 sub get_volume_notes {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - get_volume_notes");
     my $class = shift;
     PVE::Storage::DirPlugin::get_volume_notes($class, @_);
 }
@@ -225,18 +213,15 @@ sub get_volume_notes {
 # FIXME remove on the next APIAGE reset.
 # Deprecated, use update_volume_attribute instead.
 sub update_volume_notes {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - update_volume_notes");
     my $class = shift;
     PVE::Storage::DirPlugin::update_volume_notes($class, @_);
 }
 
 sub get_volume_attribute {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - get_volume_attribute");
     return PVE::Storage::DirPlugin::get_volume_attribute(@_);
 }
 
 sub update_volume_attribute {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("NFSPlugin.pm - update_volume_attribute");
     return PVE::Storage::DirPlugin::update_volume_attribute(@_);
 }
 

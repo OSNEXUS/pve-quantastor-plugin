@@ -104,7 +104,7 @@ sub zfs_parse_zvol_list {
 
 sub parse_volname {
     my ($class, $volname) = @_;
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPoolPlugin.pm - parse_volname $volname");
+    #PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPoolPlugin.pm - parse_volname $volname");
 
     if ($volname =~ m/^(((base|basevol)-(\d+)-\S+)\/)?((base|basevol|vm|subvol)-(\d+)-\S+)$/) {
 	my $format = ($6 eq 'subvol' || $6 eq 'basevol') ? 'subvol' : 'raw';

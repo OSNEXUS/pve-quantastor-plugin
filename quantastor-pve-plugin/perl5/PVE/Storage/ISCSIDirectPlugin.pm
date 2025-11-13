@@ -254,7 +254,6 @@ sub volume_snapshot_delete {
 }
 
 sub volume_has_feature {
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ISCSIDirectPlugin - volume_has_feature");
     my ($class, $scfg, $feature, $storeid, $volname, $snapname, $running) = @_;
     
     my $features = {

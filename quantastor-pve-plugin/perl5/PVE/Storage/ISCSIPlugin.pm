@@ -303,7 +303,6 @@ sub options {
 
 sub parse_volname {
     my ($class, $volname) = @_;
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ISCSIPlugin.pm - parse_volname $volname");
 
     if ($volname =~ m!^\d+\.\d+\.\d+\.(\S+)$!) {
 	return ('images', $1, undef, undef, undef, undef, 'raw');

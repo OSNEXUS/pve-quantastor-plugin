@@ -762,7 +762,6 @@ sub activate_storage {
     my $iqn = get_initiator_name();
     my $hostname = hostname() . "-proxmox-host";   # fix: use concatenation, not '+'
     my $description = "Host added by Proxmox PVE QuantaStor plug-in.";
-    print "Hostname: $hostname, Initiator: $iqn\n";
 
     # Step 1: try to fetch the host
     my $res_host_get = qs_host_get($scfg->{qs_apiv4_host}, $scfg->{qs_username}, $scfg->{qs_password}, '', 300, $iqn);
@@ -815,7 +814,6 @@ sub activate_storage {
         } elsif (exists $res_host_get->{id}) {
             # Host already exists
             $hostId = $res_host_get->{id};
-            print "QuantaStor host already exists. ID: $hostId\n";
 
         } else {
             die "Unexpected response format from qs_host_get.\n";
@@ -1209,7 +1207,7 @@ sub qs_volume_snapshot_rollback {
 
 
     # login to iscsi target
-    my $res_login = qs_iscsi_target_login($scfg, 60, $res_vol_get->{iqn});
+    my $res_login = qs_iscsi_target_login($scfg, $res_vol_get->{iqn});
 
 
 
@@ -1294,6 +1292,57 @@ sub qs_volume_rollback_is_possible {
         die "can't rollback, snapshot '$snap' does not exist on '$volname'\n";
     }
 
+    # we need to see if this snapshot is the most recent snapshot
+    # taken on this volume.
+    my $res_storage_volume_enum = qs_storage_volume_enum($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            '');
+
+    # Parse the list of objects and verify that $res_volume_get->{createdTimeStamp} is the most recent
+    # e.g. "createdTimeStamp": "2025-11-12T21:43:28Z"
+    # Determine if $res_volume_get is the most recent snapshot for volume $vname
+    my $target_snapshot_time = $res_volume_get->{createdTimeStamp};
+    qs_write_to_log("Checking if snapshot '$res_volume_get->{name}' (created: $target_snapshot_time) is the most recent for volume '$vname'");
+    my $is_most_recent = 1;
+
+    foreach my $item (@$res_storage_volume_enum) {
+        # Only consider snapshots
+        qs_write_to_log("Examining item: " . ($item->{name} // 'undef') . " (isSnapshot: " . ($item->{isSnapshot} // 'undef') . ", createdTimeStamp: " . ($item->{createdTimeStamp} // 'undef') . ")");
+        unless (defined $item->{isSnapshot} && $item->{isSnapshot} eq '1') {
+            qs_write_to_log("Skipping non-snapshot item: " . ($item->{name} // 'undef'));
+            next;
+        }
+
+        # snapshotParent should be eq to $res_volume_get->{snapshotParent}
+        unless (defined $item->{snapshotParent} && $item->{snapshotParent} eq $res_volume_get->{snapshotParent}) {
+            qs_write_to_log("Skipping snapshot '$item->{name}' (snapshotParent: " . ($item->{snapshotParent} // 'undef') . ") not matching target snapshotParent '" . ($res_volume_get->{snapshotParent} // 'undef') . "'");
+            next;
+        }
+
+        ## Check if this snapshot belongs to the target volume
+        #unless (defined $item->{origin} && $item->{origin} eq $vname) {
+        #    qs_write_to_log("Skipping snapshot '$item->{name}' (origin: " . ($item->{origin} // 'undef') . ") not matching target volume '$vname'");
+        #    next;
+        #}
+
+        qs_write_to_log("Found snapshot '$item->{name}' for volume '$vname' with createdTimeStamp: $item->{createdTimeStamp}");
+
+        # Compare timestamps
+        if ($item->{createdTimeStamp} gt $target_snapshot_time) {
+            qs_write_to_log("Snapshot '$item->{name}' is newer (created: $item->{createdTimeStamp}) than target snapshot '$res_volume_get->{name}' (created: $target_snapshot_time)");
+            $is_most_recent = 0;
+            push @$blockers, $item->{name} if defined $blockers;
+        }
+    }
+    qs_write_to_log("Finished checking snapshots for volume '$vname'. is_most_recent = $is_most_recent");
+
+    qs_write_to_log("Snapshot '$res_volume_get->{name}' is ". ($is_most_recent ? "the most recent snapshot." : "not the most recent snapshot."));
+    if (!$is_most_recent) {
+        die "can't rollback, '$snap' is not most recent snapshot on '$volname'\n";
+    }
     # can't use '-S creation', because zfs list won't reverse the order when the
     # creation time is the same second, breaking at least our tests.
     #my $snapshots = $class->zfs_get_sorted_snapshot_list($scfg, $volname, ['-s', 'creation']);
@@ -1313,7 +1362,7 @@ sub qs_volume_rollback_is_possible {
     #die "can't rollback, snapshot '$snap' does not exist on '$volid'\n"
 	#if !$found;
 
-    #die "can't rollback, '$snap' is not most recent snapshot on '$volid'\n"
+    #die "can't rollback, '$snap' is not most recent snapshot on '$vname'\n"
 	#if scalar($blockers->@*) > 0;
 
     #return 1;
