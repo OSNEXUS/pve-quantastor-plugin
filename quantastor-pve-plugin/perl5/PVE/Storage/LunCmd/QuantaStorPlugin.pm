@@ -74,7 +74,7 @@ sub qs_parse_volname {
 }
 
 sub qs_api_call {
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_call");
+    #qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_call");
     my ($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout) = @_;
 
     # Set a default timeout if not provided
@@ -222,15 +222,15 @@ sub qs_storage_volume_modify {
     my $query_params = {
         storageVolume => $storageVolume,
         newName => $newName,
-        description => 'Modified by Proxmox VE Plugin'
+        newDescription => 'Modified by Proxmox VE Plugin'
     };
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
     # Prettify the response for output
-    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
     # print "Response:\n$pretty_result\n";
-    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_modify - Response:\n$pretty_result\n");
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_modify - Response:\n$pretty_result\n");
 
     return $response;
 }
@@ -554,6 +554,11 @@ sub run_create_lu {
                                             '',
                                             300,
                                             $zvol_name);
+    # check to make sure the zvol exists
+    if (!defined($res_vol_get->{id})) {
+        die "LUN $zvol_name does not exist.";
+    }
+
     # my $zvol_iqn = $res_vol_get->{iqn};
     my $zvol_uuid = $res_vol_get->{id};
 
@@ -703,7 +708,7 @@ sub qs_iscsi_target_logout {
 
     my $portal = $scfg->{portal};
     unless ($portal && $target_iqn) {
-        qs_write_to_log("ERROR: Missing portal or target_iqn in qs_iscsi_target_login");
+        qs_write_to_log("ERROR: Missing portal or target_iqn in qs_iscsi_target_logout");
         return 0;
     }
 
@@ -986,6 +991,7 @@ sub qs_create_base {
     # logout of iscsi targets before renaming
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - logging out of $volname iqn $res_vol_get->{iqn}");
     my $res_logout = qs_iscsi_target_logout($scfg, $res_vol_get->{iqn});
+    wait_for_volume_logout($scfg, $res_vol_get->{id});
 
     # remove storage volume acl entry for local host
     my $local_host_iqn = get_initiator_name();
