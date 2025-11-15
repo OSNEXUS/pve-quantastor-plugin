@@ -78,6 +78,13 @@ sub zfs_request {
         }
     } else {
 
+        if ($scfg->{iscsiprovider} eq 'quantastor') {
+            PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_request - method $method is not a LUN command, quantastor iscsi provider will handle it via API");
+            if ($method eq 'get') {
+                return PVE::Storage::LunCmd::QuantaStorPlugin::qs_zfs_get_command($scfg, $timeout, $method, @params);
+            }
+        }
+
 	my $target = 'root@' . $scfg->{portal};
 
 	my $cmd = [@ssh_cmd, '-i', "$id_rsa_path/$scfg->{portal}_id_rsa", $target];
@@ -97,7 +104,6 @@ sub zfs_request {
 
         run_command($cmd, outfunc => $output, timeout => $timeout);
     }
-
     return $msg;
 }
 
@@ -506,7 +512,7 @@ sub zfs_delete_zvol {
 
 sub zfs_get_properties {
     my ($class, $scfg, $properties, $dataset, $timeout) = @_;
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_get_properties - called dataset $dataset");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_get_properties - called dataset $dataset properties: $properties");
     if ($scfg->{iscsiprovider} eq 'quantastor') {
         my $tmp = $dataset;
         if ($tmp =~ m{^([^/]+)/([^/]+)$}) {

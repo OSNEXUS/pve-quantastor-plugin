@@ -130,6 +130,24 @@ sub qs_api_call {
     return '';
 }
 
+sub qs_storage_pool_get {
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_pool_get");
+    my ($server_ip, $username, $password, $cert_path, $timeout, $storagePool) = @_;
+    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
+
+    my $api_name = 'storagePoolGet';
+    my $query_params = { storagePool => $storagePool };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    # Prettify the response for output
+    #my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    # print "Response:\n$pretty_result\n";
+    #qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_pool_get - Response:\n$pretty_result\n");
+
+    return $response;
+}
+
 sub qs_storage_volume_enum {
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolumeList) = @_;
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_enum, storageVolumeList: $storageVolumeList");
@@ -745,6 +763,33 @@ sub qs_zfs_create_zvol {
     my $trim_pool_name = $scfg->{pool};
     $trim_pool_name =~ s/^qs-//;
     my $create_response = qs_storage_volume_create($scfg->{qs_apiv4_host}, $scfg->{qs_username}, $scfg->{qs_password}, '', 300, $zvol, $size, $trim_pool_name);
+}
+
+sub qs_zfs_get_command {
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_zfs_get_command");
+    my ($scfg, $timeout, $method, @params) = @_;
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_zfs_get_command - called with (method: '$method'; params '@params')");
+    my $param_str = join(' ', @params);
+    my ($uuid) = $param_str =~ /qs-([0-9a-fA-F-]{36})/;
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_zfs_get_command - getting qs pool with UUID '$uuid'");
+
+    my $res_pool_get = qs_storage_pool_get($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $uuid);
+
+    # Extract values
+    my $size  = $res_pool_get->{size};
+    my $free  = $res_pool_get->{freeSpace};
+    my $used  = $size - $free;
+
+    my $msg = "$free\n$used";
+
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_zfs_get_command - returning:\n$msg");
+
+    return $msg;
 }
 
 sub get_initiator_name {
