@@ -8,8 +8,6 @@ use IO::Socket::SSL;
 use Sys::Hostname;
 use URI::Escape;
 
-use PVE::Storage::QuantaStorPlugin;
-
 use LWP::UserAgent;
 use HTTP::Request;
 use MIME::Base64;
@@ -17,9 +15,14 @@ use JSON;
 
 use PVE::Storage::Plugin;
 our $MAX_VOLUMES_PER_GUEST = 1024;
+our $QS_DEBUG = 0;
 
 sub qs_write_to_log {
     my ($msg) = @_;
+
+    if (!$QS_DEBUG) {
+        return;
+    }
 
     my $logfile = '/var/log/pve-quantastor-plugin.log';
 
