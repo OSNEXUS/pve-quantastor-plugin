@@ -15,6 +15,7 @@ use JSON;
 
 use PVE::Storage::Plugin;
 our $MAX_VOLUMES_PER_GUEST = 1024;
+# Set to 1 to enable debug logging
 our $QS_DEBUG = 0;
 
 sub qs_write_to_log {

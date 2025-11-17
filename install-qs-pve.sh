@@ -13,6 +13,8 @@ usage() {
     echo "This script copies plugin files from the build directory to the appropriate Proxmox directories."
     echo "On the first run, it creates a backup of the original files in $BACKUP_DIR."
     echo "You can restore the original files at any time using the --rollback option."
+    echo "This script must be run from the directory containing the 'quantastor-pve-plugin' folder in the root"
+    echo "of the plugin source tree."
     echo ""
     echo "Usage: $0 [--checksum] [--rollback] [--help]"
     echo ""
@@ -41,11 +43,11 @@ for arg in "$@"; do
 done
 
 
-# We may need to update this to download from the github repo and then install the files.
-# Source directory (where the new scripts are located)
-SOURCE_DIR_PERL5="/mnt/pve/quantastor-pve-plugin/perl5/PVE"
-SOURCE_DIR_JS="/mnt/pve/quantastor-pve-plugin/js/pve-manager"
-SOURCE_DIR_APIDOC="/mnt/pve/quantastor-pve-plugin/js/pve-docs/api-viewer"
+# Use the full current working directory as the base source directory
+BASE_SOURCE_DIR="$(pwd)/quantastor-pve-plugin"
+SOURCE_DIR_PERL5="$BASE_SOURCE_DIR/perl5/PVE"
+SOURCE_DIR_JS="$BASE_SOURCE_DIR/js/pve-manager"
+SOURCE_DIR_APIDOC="$BASE_SOURCE_DIR/js/pve-docs/api-viewer"
 
 # Target directory
 TARGET_DIR_PERL5="/usr/share/perl5/PVE"
