@@ -41,6 +41,7 @@ use PVE::Storage::PBSPlugin;
 use PVE::Storage::BTRFSPlugin;
 use PVE::Storage::ESXiPlugin;
 
+
 # Storage API version. Increment it on changes in storage API interface.
 use constant APIVER => 10;
 # Age is the number of versions we're backward compatible with.
@@ -655,7 +656,9 @@ sub path {
     my $scfg = storage_config($cfg, $storeid);
 
     my $plugin = PVE::Storage::Plugin->lookup($scfg->{type});
+
     my ($path, $owner, $vtype) = $plugin->path($scfg, $volname, $storeid, $snapname);
+
     return wantarray ? ($path, $owner, $vtype) : $path;
 }
 
@@ -1005,7 +1008,6 @@ sub vdisk_alloc {
     activate_storage($cfg, $storeid);
 
     my $plugin = PVE::Storage::Plugin->lookup($scfg->{type});
-
     # lock shared storage
     return $plugin->cluster_lock_storage($storeid, $scfg->{shared}, undef, sub {
 	my $old_umask = umask(umask|0037);
@@ -1145,7 +1147,6 @@ sub volume_list {
 }
 
 sub uevent_seqnum {
-
     my $filename = "/sys/kernel/uevent_seqnum";
 
     my $seqnum = 0;
@@ -1181,7 +1182,6 @@ sub activate_storage {
 	die "connection check for storage '$storeid' failed - $@\n" if $@;
 	die "storage '$storeid' is not online\n";
     }
-
     $plugin->activate_storage($storeid, $scfg, $cache);
 
     my $newseq = uevent_seqnum ();
@@ -1417,7 +1417,6 @@ sub scan_cifs {
 }
 
 sub scan_zfs {
-
     my $cmd = ['zfs',  'list', '-t', 'filesystem', '-Hp', '-o', 'name,avail,used'];
 
     my $res = [];

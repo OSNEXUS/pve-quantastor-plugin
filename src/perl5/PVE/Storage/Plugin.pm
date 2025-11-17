@@ -25,6 +25,9 @@ use constant COMPRESSOR_RE => join('|', KNOWN_COMPRESSION_FORMATS);
 use constant LOG_EXT => ".log";
 use constant NOTES_EXT => ".notes";
 
+# debug
+use PVE::Storage::LunCmd::QuantaStorPlugin;
+
 our @COMMON_TAR_FLAGS = qw(
     --one-file-system
     -p --sparse --numeric-owner --acls
