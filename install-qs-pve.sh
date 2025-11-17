@@ -44,7 +44,7 @@ done
 
 
 # Use the full current working directory as the base source directory
-BASE_SOURCE_DIR="$(pwd)/quantastor-pve-plugin"
+BASE_SOURCE_DIR="$(pwd)/src"
 SOURCE_DIR_PERL5="$BASE_SOURCE_DIR/perl5/PVE"
 SOURCE_DIR_JS="$BASE_SOURCE_DIR/js/pve-manager"
 SOURCE_DIR_APIDOC="$BASE_SOURCE_DIR/js/pve-docs/api-viewer"
