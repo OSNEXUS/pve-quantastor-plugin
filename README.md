@@ -42,6 +42,11 @@ This repository provides a Proxmox (PVE) storage plugin for QuantaStor, enabling
 		 sudo ./install-qs-pve.sh --rollback
 		 ```
 
+     - Reload services to use new source scripts:
+         ```bash
+		 sudo service pve-cluster restart && service pvedaemon restart && service pvestatd restart && service pveproxy restart
+		 ```
+
 ## How it works
 - On first run, the script creates backups of all target files (except the new plugin file) in `/var/tmp/pve-quantastor-backup`.
 - The `--rollback` option restores these files, undoing any changes made by the plugin.
