@@ -16,7 +16,8 @@ use JSON;
 use PVE::Storage::Plugin;
 our $MAX_VOLUMES_PER_GUEST = 1024;
 # Set to 1 to enable debug logging
-our $QS_DEBUG = 0;
+our $QS_DEBUG = 1;
+our $QS_VERBOSE = 1;
 
 sub qs_write_to_log {
     my ($msg) = @_;
@@ -36,6 +37,15 @@ sub qs_write_to_log {
     }
 }
 
+sub qs_log_pretty_response {
+    my ($response, $function_name) = @_;
+    if (!$QS_VERBOSE) {
+        return;
+    }
+    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
+    qs_write_to_log("LunCmd/QuantaStor.pm - $function_name - Response:\n$pretty_result\n");
+}
+
 
 #
 #
@@ -52,13 +62,18 @@ sub qs_path {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_path - parsed volname: vtype=$vtype, name=$name, vmid=$vmid");
     #e.g. iscsi://10.0.26.215/iqn.2009-10.com.osnexus:7b6f4eb4-2f14af41e215fa3a:vm-100-disk-0/1
     my $path = "iscsi://$scfg->{portal}/";
-    my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+    #trim qs- from pool name
+    $storeid = $scfg->{pool};
+    $storeid =~ s/^qs-//;
+    my $searchParams = "=name:$name,=storagePoolId:$storeid";
+    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
                                             $scfg->{qs_username},
                                             $scfg->{qs_password},
                                             '',
                                             300,
-                                            $name);
-    $path .= "$res_vol_get->{iqn}/0";
+                                            $searchParams);
+    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
+    $path .= "$res_vol_obj->{iqn}/0";
 
     # get the iqn for the given volume
     return ($path, $vmid, $vtype);
@@ -137,19 +152,51 @@ sub qs_api_call {
 sub qs_storage_pool_get {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_pool_get");
     my ($server_ip, $username, $password, $cert_path, $timeout, $storagePool) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
     my $api_name = 'storagePoolGet';
     my $query_params = { storagePool => $storagePool };
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    #my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    #qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_pool_get - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_storage_pool_get');
 
     return $response;
+}
+
+sub qs_storage_volume_search {
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_search");
+    my ($server_ip, $username, $password, $cert_path, $timeout, $searchParams) = @_;
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_search - searchParams: $searchParams");
+
+    # curl -k "https://10.0.26.230:8153/qstorapi/storageVolumeSearch?searchParams=%3Dname%3Avm-100-disk-0,%3DstoragePoolId%3A1e931b00-d85b-bb83-071a-80795e5a2409"
+    # $ searchParams = "=name:vm-100-disk-0,=storagePoolId:1e931b00-d85b-bb83-071a-80795e5a2409"
+    # $ formatted_searchParams = "%3Dname%3Avm-100-disk-0,%3DstoragePoolId%3A1e931b00-d85b-bb83-071a-80795e5a2409"
+    my $api_name = 'storageVolumeSearch';
+    my $query_params = { searchParams => $searchParams };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
+
+    qs_log_pretty_response($response, 'qs_storage_volume_search');
+
+    return $response;
+}
+
+sub qs_get_object_from_search_response {
+    my ($response) = @_;
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_get_object_from_search_response");
+
+    if (defined($response->{list}) && $response->{objCount} == 1) {
+        foreach my $obj (@{$response->{list}}) {
+            if (defined($obj->{id})) {
+                return $obj;
+            }
+            else {
+                qs_write_to_log("LunCmd/QuantaStor.pm - qs_get_object_from_search_response - object id not defined in search response");
+            }
+        }
+    }
+
+    return undef;
 }
 
 sub qs_storage_volume_enum {
@@ -164,35 +211,13 @@ sub qs_storage_volume_enum {
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    #my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    #qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_enum - Response:\n$pretty_result\n");
-
-    return $response;
-}
-
-sub qs_storage_volume_get {
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_get");
-    my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
-
-    my $api_name = 'storageVolumeGet';
-    my $query_params = { storageVolume => $storageVolume };
-
-    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
-
-    # Prettify the response for output
-    #my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    #qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_get - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_storage_volume_enum');
 
     return $response;
 }
 
 sub qs_storage_volume_create {
     my ($server_ip, $username, $password, $cert_path, $timeout, $name, $size, $pool) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_create $name $size $pool");
 
     my $api_name = 'storageVolumeCreate';
@@ -205,10 +230,7 @@ sub qs_storage_volume_create {
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    #my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    #qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_create - Response:\n$pretty_result\n");
+    qs_log_pretty_response($response, 'qs_storage_volume_create');
 
     return $response;
 }
@@ -216,7 +238,6 @@ sub qs_storage_volume_create {
 sub qs_storage_volume_delete {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_delete");
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
     my $api_name = 'storageVolumeDelete';
     my $query_params = {
@@ -227,17 +248,13 @@ sub qs_storage_volume_delete {
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_delete - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_storage_volume_delete');
 
     return $response;
 }
 
 sub qs_storage_volume_modify {
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $newName) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_modify $newName");
 
     my $api_name = 'storageVolumeModify';
@@ -249,17 +266,13 @@ sub qs_storage_volume_modify {
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_modify - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_storage_volume_modify');
 
     return $response;
 }
 
 sub qs_storage_volume_snapshot {
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $snapshotName) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_snapshot $storageVolume snapshot name: $snapshotName");
 
     my $api_name = 'storageVolumeSnapshot';
@@ -271,27 +284,13 @@ sub qs_storage_volume_snapshot {
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_snapshot - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_storage_volume_snapshot');
 
     return $response;
 }
 
-#// @doc Roll Storage Volume back from the most recent snapshot.
-#int osn__storageVolumeRollback(
-#    /*in*/ xsd__string storageVolume,  //@doc Name or UUID of the Storage Volume
-#    /*in*/ xsd__string snapshotVolume, //@doc Snapshot Name or UUID to roll back the Storage Volume from. Needs to be the most recent snapshot
-#    /*in*/ xsd__unsignedInt flags,
-#    /*out*/ struct osn__storageVolumeRollbackResponse {
-#        osn__task task;
-#        osn__storageVolume obj;
-#    } & r);
-
 sub qs_storage_volume_rollback {
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $snapshotVolume) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_rollback $storageVolume snapshot name: $snapshotVolume");
 
     my $api_name = 'storageVolumeRollback';
@@ -302,17 +301,13 @@ sub qs_storage_volume_rollback {
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_rollback - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_storage_volume_rollback');
 
     return $response;
 }
 
 sub qs_storage_volume_clone {
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $cloneName) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_clone $storageVolume clone name: $cloneName");
 
     my $api_name = 'storageVolumeClone';
@@ -324,10 +319,7 @@ sub qs_storage_volume_clone {
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_clone - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_storage_volume_clone');
 
     return $response;
 }
@@ -335,17 +327,13 @@ sub qs_storage_volume_clone {
 sub qs_storage_volume_acl_add {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_add");
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $host) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
     my $api_name = 'storageVolumeAclAddRemoveEx';
     my $query_params = { storageVolumeList => $storageVolume, host => $host, modType => 0 };
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_add - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_storage_volume_acl_add');
 
     return $response;
 }
@@ -353,17 +341,13 @@ sub qs_storage_volume_acl_add {
 sub qs_storage_volume_acl_remove {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_remove");
     my ($server_ip, $username, $password, $cert_path, $timeout,  $storageVolume, $host) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
     my $api_name = 'storageVolumeAclAddRemoveEx';
     my $query_params = { storageVolumeList => $storageVolume, host => $host, modType => 1 };
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_acl_remove - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_storage_volume_acl_remove');
 
     return $response;
 }
@@ -371,17 +355,13 @@ sub qs_storage_volume_acl_remove {
 sub qs_storage_volume_utilization_enum {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_utilization_enum");
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume, $offsetDays, $numberOfDays) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
     my $api_name = 'storageVolumeUtilizationEnum';
     my $query_params = { storageVolume => $storageVolume, offsetDays => $offsetDays, numberOfDays => $numberOfDays };
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_utilization_enum - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_storage_volume_utilization_enum');
 
     return $response;
 }
@@ -389,17 +369,13 @@ sub qs_storage_volume_utilization_enum {
 sub qs_storage_volume_session_enum {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_session_enum");
     my ($server_ip, $username, $password, $cert_path, $timeout, $storageVolume) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
     my $api_name = 'sessionEnum';
     my $query_params = { storageVolume => $storageVolume };
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_session_enum - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_storage_volume_session_enum');
 
     return $response;
 }
@@ -408,7 +384,6 @@ sub qs_host_add {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_add");
     my ($server_ip, $username, $password, $cert_path, $timeout, $hostname, $ipAddress, $param_username, $param_password,
         $hostType, $description, $iqn) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
     my $api_name = 'hostAdd';
     my $query_params = { hostname => $hostname, ipAddress => $ipAddress, username => $param_username, password => $param_username,
@@ -416,10 +391,7 @@ sub qs_host_add {
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_add - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_host_add');
 
     return $response;
 }
@@ -427,17 +399,13 @@ sub qs_host_add {
 sub qs_host_get {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_get");
     my ($server_ip, $username, $password, $cert_path, $timeout, $host) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
     my $api_name = 'hostGet';
     my $query_params = { host => $host };
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_get - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_host_get');
 
     return $response;
 }
@@ -445,17 +413,13 @@ sub qs_host_get {
 sub qs_host_remove {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_remove");
     my ($server_ip, $username, $password, $cert_path, $timeout, $host) = @_;
-    # return qs_api_call($server_ip, $username, $password, 'storagePoolEnum', { }, $cert_path, $timeout);
 
     my $api_name = 'hostRemove';
     my $query_params = { host => $host };
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $cert_path, $timeout);
 
-    # Prettify the response for output
-    # my $pretty_result = to_json($response, { utf8 => 1, pretty => 1 });
-    # print "Response:\n$pretty_result\n";
-    # qs_write_to_log("LunCmd/QuantaStor.pm - qs_host_remove - Response:\n$pretty_result\n");
+    #qs_log_pretty_response($response, 'qs_host_remove');
 
     return $response;
 }
@@ -524,25 +488,22 @@ sub run_list_lu {
     my $object = $params[0];
     my $result = $object;
 
-    # Get the zvol name from the full path
-    $object =~ s{^/dev/zvol/}{};
-    # Remove the qs-uuid/ part, leaving only the zvol name
-    $object =~ s{^qs-[^/]+/}{};
-    my $zvol_name = $object;
+    my ($qs_pool_id, $zvol_name) = qs_parse_lun_path($object);
     qs_write_to_log("LunCmd/QuantaStor.pm - run_list_lu - requested object: '$object', zvol_name: '$zvol_name'");
-    my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+    my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
+    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
                                             $scfg->{qs_username},
                                             $scfg->{qs_password},
                                             '',
                                             300,
-                                            $zvol_name);
-
+                                            $searchParams);
+    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
     # happy path
-    if (defined($res_vol_get->{lun}) && defined($res_vol_get->{id})) {
+    if (defined($res_vol_obj->{lun}) && defined($res_vol_obj->{id})) {
         if ($result_value_type eq "lun-id") {
-            $result = $res_vol_get->{lun};
+            $result = $res_vol_obj->{lun};
         } else {
-            $result = "/dev/zvol/qs-" . $res_vol_get->{storagePoolId} . "/" . $res_vol_get->{name};
+            $result = "/dev/zvol/qs-" . $res_vol_obj->{storagePoolId} . "/" . $res_vol_obj->{name};
         }
         qs_write_to_log("LunCmd/QuantaStor.pm - run_list_lu - found object: '$object' with result_value_type: '$result_value_type', result: '$result'");
     } else {
@@ -563,26 +524,25 @@ sub run_create_lu {
     # e.g. params /dev/zvol/qs-7b6f4eb4-0d07-6966-6442-3b3730925e55/vm-100-disk-0
     my $lun_path  = $params[0];
 
-    # Get the zvol name from the full path
-    $lun_path =~ s{^/dev/zvol/}{};
-    # Remove the qs-uuid/ part, leaving only the zvol name
-    $lun_path =~ s{^qs-[^/]+/}{};
-    my $zvol_name = $lun_path;
+    my ($qs_pool_id, $zvol_name) = qs_parse_lun_path($lun_path);
+
     qs_write_to_log("LunCmd/QuantaStor.pm - ZVOL Name: $zvol_name");
-    # make storageVolumeGet call to get the quantastor UUID and iqn of the zvol
-    my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+    # make storageVolumeSearch call to get the quantastor UUID and iqn of the zvol
+    my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
+    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
                                             $scfg->{qs_username},
                                             $scfg->{qs_password},
                                             '',
                                             300,
-                                            $zvol_name);
+                                            $searchParams);
+    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
     # check to make sure the zvol exists
-    if (!defined($res_vol_get->{id})) {
+    if (!defined($res_vol_obj->{id})) {
         die "LUN $zvol_name does not exist.";
     }
 
-    # my $zvol_iqn = $res_vol_get->{iqn};
-    my $zvol_uuid = $res_vol_get->{id};
+    # my $zvol_iqn = $res_vol_obj->{iqn};
+    my $zvol_uuid = $res_vol_obj->{id};
 
     # get local host iqn
     my $local_host_iqn = get_initiator_name();
@@ -595,7 +555,7 @@ sub run_create_lu {
 
     # we need to iscsi target login here.
     # iscsiadm -m node --targetname iqn.2009-10.com.osnexus:7b6f4eb4-2f14af41e215fa3a:vm-100-disk-0 --portal 10.0.26.215 --login
-    my $res_login = qs_iscsi_target_login($scfg, $res_vol_get->{iqn});
+    my $res_login = qs_iscsi_target_login($scfg, $res_vol_obj->{iqn});
 
     # return iqn of the target
     return "";
@@ -610,20 +570,17 @@ sub run_delete_lu {
     my $lun_path  = $params[0];
     qs_write_to_log("LunCmd/QuantaStor.pm - run_delete_lu - called with (method: '$method'; param[0]: '$lun_path')");
 
-    # Get the zvol name from the full path
-    $lun_path =~ s{^/dev/zvol/}{};
-    # Remove the qs-uuid/ part, leaving only the zvol name
-    $lun_path =~ s{^qs-[^/]+/}{};
-    my $zvol_name = $lun_path;
+    my ($qs_pool_id, $zvol_name) = qs_parse_lun_path($lun_path);
 
-    # verify the zvol exists.
-    my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+    my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
+    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
                                             $scfg->{qs_username},
                                             $scfg->{qs_password},
                                             '',
                                             300,
-                                            $zvol_name);
-    if (!defined($res_vol_get->{id})) {
+                                            $searchParams);
+    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
+    if (!defined($res_vol_obj->{id})) {
         die "LUN $zvol_name does not exist.";
     }
 
@@ -641,13 +598,25 @@ sub run_delete_lu {
                                                             $scfg->{qs_password},
                                                             '',
                                                             300,
-                                                            $res_vol_get->{id},
+                                                            $res_vol_obj->{id},
                                                             $res_host_get->{id});
 
     # logout from iscsi target
-    my $res_logout = qs_iscsi_target_logout($scfg, $res_vol_get->{iqn});
-
+    my $res_logout = qs_iscsi_target_logout($scfg, $res_vol_obj->{iqn});
     return "";
+}
+
+# Helper function to extract qs_uuid and zvol_name from lun_path
+sub qs_parse_lun_path {
+    my ($lun_path) = @_;
+    # Remove /dev/zvol/ prefix if present
+    $lun_path =~ s{^/dev/zvol/}{};
+    # Extract the uuid part
+    my ($qs_pool_id) = ($lun_path =~ m{^qs-([0-9a-fA-F\-]+)/});
+    # Remove the qs-uuid/ part, leaving only the zvol name
+    $lun_path =~ s{^qs-[^/]+/}{};
+    my $zvol_name = $lun_path;
+    return ($qs_pool_id, $zvol_name);
 }
 
 sub qs_iscsi_target_discover {
@@ -770,12 +739,10 @@ sub qs_zfs_create_zvol {
 }
 
 sub qs_zfs_get_command {
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_zfs_get_command");
     my ($scfg, $timeout, $method, @params) = @_;
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_zfs_get_command - called with (method: '$method'; params '@params')");
     my $param_str = join(' ', @params);
     my ($uuid) = $param_str =~ /qs-([0-9a-fA-F-]{36})/;
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_zfs_get_command - getting qs pool with UUID '$uuid'");
 
     my $res_pool_get = qs_storage_pool_get($scfg->{qs_apiv4_host},
                                             $scfg->{qs_username},
@@ -790,8 +757,6 @@ sub qs_zfs_get_command {
     my $used  = $size - $free;
 
     my $msg = "$free\n$used";
-
-    qs_write_to_log("LunCmd/QuantaStor.pm - qs_zfs_get_command - returning:\n$msg");
 
     return $msg;
 }
@@ -977,22 +942,21 @@ sub qs_zfs_parse_zvol_list {
 
 sub qs_zfs_delete_zvol {
     my ($scfg, $zvol) = @_;
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - zfs_delete_zvol - called with (zvol: '$zvol')");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_zfs_delete_zvol - called with (zvol: '$zvol')");
 
     my $err;
-    # Get the zvol name from the full path
-    $zvol =~ s{^/dev/zvol/}{};
-    # Remove the qs-uuid/ part, leaving only the zvol name
-    $zvol =~ s{^qs-[^/]+/}{};
-    my $zvol_name = $zvol;
+    my ($qs_pool_id, $zvol_name) = qs_parse_lun_path($zvol);
+    $qs_pool_id = $scfg->{pool};
+    $qs_pool_id =~ s/^qs-//;
 
-    # verify the zvol exists.
-    my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+    my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
+    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
                                             $scfg->{qs_username},
                                             $scfg->{qs_password},
                                             '',
                                             300,
-                                            $zvol_name);
+                                            $searchParams);
+    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
     # we need to do error checking here. aginst the json response.
 
     # remove the zvol
@@ -1001,24 +965,28 @@ sub qs_zfs_delete_zvol {
                                                             $scfg->{qs_password},
                                                             '',
                                                             300,
-                                                            $res_vol_get->{id});
+                                                            $res_vol_obj->{id});
 
 
     die $err if $err;
 }
 
 sub qs_get_zvol_id_by_name {
-    my ($scfg, $zvol_name) = @_;
+    my ($scfg, $zvol_name, $pool) = @_;
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_get_zvol_id_by_name - called with (zvol_name: '$zvol_name')");
 
-    my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
+    # trim qs- from pool name
+    $pool =~ s/^qs-//;
+    my $searchParams = "=name:$zvol_name,=storagePoolId:$pool";
+    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
                                             $scfg->{qs_username},
                                             $scfg->{qs_password},
                                             '',
                                             300,
-                                            $zvol_name);
+                                            $searchParams);
+    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
 
-    return $res_vol_get->{id};
+    return $res_vol_obj->{id};
 }
 
 sub qs_create_base {
