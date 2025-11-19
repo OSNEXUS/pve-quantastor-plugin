@@ -519,7 +519,7 @@ sub zfs_get_properties {
             # Pool + Volume ID is the correct path for QuantaStor zvols
             my $pool = $1;
             my $vol  = $2;
-            my $vol_id = PVE::Storage::LunCmd::QuantaStorPlugin::qs_get_zvol_id_by_name($scfg, $vol);
+            my $vol_id = PVE::Storage::LunCmd::QuantaStorPlugin::qs_get_zvol_id_by_name($scfg, $vol, $pool);
             $dataset = "$pool/$vol_id";
             PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin.pm - zfs_get_properties - modified dataset to $dataset");
         }
