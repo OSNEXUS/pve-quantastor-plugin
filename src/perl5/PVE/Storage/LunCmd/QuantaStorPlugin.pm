@@ -63,6 +63,7 @@ sub qs_path {
     #e.g. iscsi://10.0.26.215/iqn.2009-10.com.osnexus:7b6f4eb4-2f14af41e215fa3a:vm-100-disk-0/1
     my $path = "iscsi://$scfg->{portal}/";
     #trim qs- from pool name
+    $storeid = $scfg->{pool};
     $storeid =~ s/^qs-//;
     my $searchParams = "=name:$name,=storagePoolId:$storeid";
     my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
@@ -165,6 +166,7 @@ sub qs_storage_pool_get {
 sub qs_storage_volume_search {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_search");
     my ($server_ip, $username, $password, $cert_path, $timeout, $searchParams) = @_;
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_search - searchParams: $searchParams");
 
     # curl -k "https://10.0.26.230:8153/qstorapi/storageVolumeSearch?searchParams=%3Dname%3Avm-100-disk-0,%3DstoragePoolId%3A1e931b00-d85b-bb83-071a-80795e5a2409"
     # $ searchParams = "=name:vm-100-disk-0,=storagePoolId:1e931b00-d85b-bb83-071a-80795e5a2409"
@@ -940,10 +942,12 @@ sub qs_zfs_parse_zvol_list {
 
 sub qs_zfs_delete_zvol {
     my ($scfg, $zvol) = @_;
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - zfs_delete_zvol - called with (zvol: '$zvol')");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_zfs_delete_zvol - called with (zvol: '$zvol')");
 
     my $err;
     my ($qs_pool_id, $zvol_name) = qs_parse_lun_path($zvol);
+    $qs_pool_id = $scfg->{pool};
+    $qs_pool_id =~ s/^qs-//;
 
     my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
     my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
