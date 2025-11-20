@@ -23,6 +23,7 @@ usage() {
     echo ""
     echo "  --checksum   Print sha256 hashes of source and target files before and after copy"
     echo "  --rollback   Restore files from backup (undo changes made by this script)"
+    echo "  --fullcopy   Perform a full copy install (overwrite all files)"
     echo "  --help       Show this help message"
     echo ""
     echo "Backup/rollback system:"
@@ -39,6 +40,9 @@ for arg in "$@"; do
         --rollback)
             DO_ROLLBACK=1
             ;;
+        --fullcopy)
+            FULL_COPY=1
+            ;;
         --help|-h)
             usage
             ;;
@@ -47,7 +51,7 @@ done
 
 
 # Use the full current working directory as the base source directory
-BASE_SOURCE_DIR="$(pwd)/src/new"
+BASE_SOURCE_DIR="$(pwd)/src"
 SOURCE_DIR_PERL5="$BASE_SOURCE_DIR/PVE"
 SOURCE_DIR_JS="$BASE_SOURCE_DIR/pve-manager/js"
 SOURCE_DIR_APIDOC="$BASE_SOURCE_DIR/pve-docs/api-viewer"
@@ -60,9 +64,7 @@ TARGET_DIR_APIDOC="/usr/share/pve-docs/api-viewer"
 # create an array of the source files and an array of the target files
 FILE_NAMES_PERL5=(
     "Storage/ZFSPlugin"
-    "Storage/ZFSPoolPlugin"
-    "Storage/LunCmd/QuantaStorPlugin"
-    "Storage"
+    "Storage/LunCmd/QuantaStorPlugin.pm"
 )
 
 FILE_NAMES_JS=(
@@ -85,14 +87,15 @@ echo "PVE version detected: $raw_version"
 backup_files() {
     local file_names=("${!1}")
     local dest_dir="$2"
+    local suffix="$3"
     for file in "${file_names[@]}"; do
         # Skip backup for QuantaStorPlugin.pm
         if [[ "$file" == "Storage/LunCmd/QuantaStorPlugin.pm" ]]; then
             continue
         fi
-        local dest="$dest_dir/$file"
+        local dest="$dest_dir/$file$suffix"
         if [[ -f "$dest" ]]; then
-            local backup_path="$BACKUP_DIR/$file.backup"
+            local backup_path="$BACKUP_DIR/$file$suffix.backup"
             mkdir -p "$(dirname "$backup_path")"
             cp "$dest" "$backup_path"
             echo "Backed up: $dest to $backup_path"
@@ -104,13 +107,14 @@ backup_files() {
 rollback_files() {
     local file_names=("${!1}")
     local dest_dir="$2"
+    local suffix="$3"
     for file in "${file_names[@]}"; do
         # Skip rollback for QuantaStorPlugin.pm
         if [[ "$file" == "Storage/LunCmd/QuantaStorPlugin.pm" ]]; then
             continue
         fi
-        local backup_path="$BACKUP_DIR/$file.backup"
-        local dest="$dest_dir/$file"
+        local backup_path="$BACKUP_DIR/$file$suffix.backup"
+        local dest="$dest_dir/$file$suffix"
         if [[ -f "$backup_path" ]]; then
             mkdir -p "$(dirname "$dest")"
             cp "$backup_path" "$dest"
@@ -143,8 +147,10 @@ copy_files() {
 print_hashes() {
     local file_names=("${!1}")
     local dir="$2"
+    local version="$4"
+    local suffix="$5"
     for file in "${file_names[@]}"; do
-        local path="$dir/$file"
+        local path="$dir/$file.$version$suffix"
         if [[ -f "$path" ]]; then
             sha256sum "$path"
         else
@@ -153,17 +159,51 @@ print_hashes() {
     done
 }
 
+doPatchInstall() {
+
+}
+
+doFullCopyInstall() {
+    # copy files from Source to Target - perl5
+    copy_files FILE_NAMES_PERL5[@] "$SOURCE_DIR_PERL5" "$TARGET_DIR_PERL5" "$raw_version" ".pm"
+
+    # copy files from Source to Target - js
+    copy_files FILE_NAMES_JS[@] "$SOURCE_DIR_JS" "$TARGET_DIR_JS" "$raw_version" ".js"
+
+    # copy files from Source to Target - apidoc
+    copy_files FILE_NAME_APIDOC[@] "$SOURCE_DIR_APIDOC" "$TARGET_DIR_APIDOC" "$raw_version" ".js"
+}
+
+doChecksum() {
+    # perl5 files
+    print_hashes FILE_NAMES_PERL5[@] "$SOURCE_DIR_PERL5" "$raw_version" ".pm"
+    echo "---------------------------------"
+    print_hashes FILE_NAMES_PERL5[@] "$TARGET_DIR_PERL5" "" ".pm"
+    echo "---------------------------------"
+
+    # js files
+    print_hashes FILE_NAMES_JS[@] "$SOURCE_DIR_JS" "$raw_version" ".js"
+    echo "---------------------------------"
+    print_hashes FILE_NAMES_JS[@] "$TARGET_DIR_JS" "" ".js"
+    echo "---------------------------------"
+
+    # apidoc files
+    print_hashes FILE_NAME_APIDOC[@] "$SOURCE_DIR_APIDOC" "$raw_version" ".js"
+    echo "---------------------------------"
+    print_hashes FILE_NAME_APIDOC[@] "$TARGET_DIR_APIDOC" "" ".js"
+    echo "---------------------------------"
+}
+
 # main
 # Handle rollback before any other operation
 if [[ $DO_ROLLBACK -eq 1 ]]; then
     echo "Rolling back files from $BACKUP_DIR..."
-    rollback_files FILE_NAMES_PERL5[@] "$TARGET_DIR_PERL5"
-    rollback_files FILE_NAMES_JS[@] "$TARGET_DIR_JS"
-    rollback_files FILE_NAME_APIDOC[@] "$TARGET_DIR_APIDOC"
+    rollback_files FILE_NAMES_PERL5[@] "$TARGET_DIR_PERL5" ".pm"
+    rollback_files FILE_NAMES_JS[@] "$TARGET_DIR_JS" ".js"
+    rollback_files FILE_NAME_APIDOC[@] "$TARGET_DIR_APIDOC" ".js"
     echo "Rollback complete."
     exit 0
 fi
-
 
 # Only perform backup if BACKUP_DIR does not exist and no backup files exist
 should_backup=0
@@ -201,64 +241,33 @@ fi
 
 if [[ $should_backup -eq 1 ]]; then
     echo "First run detected: backing up target files to $BACKUP_DIR..."
-    backup_files FILE_NAMES_PERL5[@] "$TARGET_DIR_PERL5"
-    backup_files FILE_NAMES_JS[@] "$TARGET_DIR_JS"
-    backup_files FILE_NAME_APIDOC[@] "$TARGET_DIR_APIDOC"
+    backup_files FILE_NAMES_PERL5[@] "$TARGET_DIR_PERL5" ".pm"
+    backup_files FILE_NAMES_JS[@] "$TARGET_DIR_JS" ".js"
+    backup_files FILE_NAME_APIDOC[@] "$TARGET_DIR_APIDOC" ".js"
     echo "Backup complete."
     exit 0
 fi
 
+# might only need to do this on full copy installs
 if [[ $DO_CHECKSUM -eq 1 ]]; then
     # perl5 files
-    echo "Hashes for Source and Target files pre install [perl5]:"
-    print_hashes FILE_NAMES_PERL5[@] "$SOURCE_DIR_PERL5"
-    echo "---------------------------------"
-    print_hashes FILE_NAMES_PERL5[@] "$TARGET_DIR_PERL5"
-    echo "---------------------------------"
-
-    # js files
-    echo "Hashes for Source and Target files pre install [js]:"
-    print_hashes FILE_NAMES_JS[@] "$SOURCE_DIR_JS"
-    echo "---------------------------------"
-    print_hashes FILE_NAMES_JS[@] "$TARGET_DIR_JS"
-    echo "---------------------------------"
-
-    # apidoc files
-    echo "Hashes for Source and Target files pre install [apidoc]:"
-    print_hashes FILE_NAME_APIDOC[@] "$SOURCE_DIR_APIDOC"
-    echo "---------------------------------"
-    print_hashes FILE_NAME_APIDOC[@] "$TARGET_DIR_APIDOC"
-    echo "---------------------------------"
-
+    echo "Hashes for Source and Target files pre install:"
+    doChecksum
 fi
 
-# copy files from Source to Target - perl5
-copy_files FILE_NAMES_PERL5[@] "$SOURCE_DIR_PERL5" "$TARGET_DIR_PERL5" "$raw_version" ".pm"
+# installation
+if [[ $FULL_COPY -eq 1 ]]; then
+    doFullCopyInstall
+else
+    # Patch install mode - default
+    doPatchInstall
+fi
 
-# copy files from Source to Target - js
-copy_files FILE_NAMES_JS[@] "$SOURCE_DIR_JS" "$TARGET_DIR_JS" "$raw_version" ".js"
-
-# copy files from Source to Target - apidoc
-copy_files FILE_NAME_APIDOC[@] "$SOURCE_DIR_APIDOC" "$TARGET_DIR_APIDOC" "$raw_version" ".js"
-
+# might only need to do this on full copy installs
 if [[ $DO_CHECKSUM -eq 1 ]]; then
-    # final hashes should match if the copy was successful
-    echo "Hashes for Source and Target files post install [perl5]:"
-    print_hashes FILE_NAMES_PERL5[@] "$SOURCE_DIR_PERL5"
-    echo "---------------------------------"
-    print_hashes FILE_NAMES_PERL5[@] "$TARGET_DIR_PERL5"
-    echo "---------------------------------"
-
-    echo "Hashes for Source and Target files post install [js]:"
-    print_hashes FILE_NAMES_JS[@] "$SOURCE_DIR_JS"
-    echo "---------------------------------"
-    print_hashes FILE_NAMES_JS[@] "$TARGET_DIR_JS"
-    echo "---------------------------------"
-
-    # apidoc files
-    echo "Hashes for Source and Target files post install [apidoc]:"
-    print_hashes FILE_NAME_APIDOC[@] "$SOURCE_DIR_APIDOC"
-    echo "---------------------------------"
-    print_hashes FILE_NAME_APIDOC[@] "$TARGET_DIR_APIDOC"
-    echo "---------------------------------"
+    echo "Hashes for Source and Target files post install:"
+    doChecksum
 fi
+
+
+
