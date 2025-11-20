@@ -1,0 +1,66 @@
+--- apidoc.9.1.1.js	2025-11-20 19:39:08.558605270 +0000
++++ apidoc.9.1.1_new.js	2025-11-20 19:52:52.919330274 +0000
+@@ -60092,6 +60092,31 @@
+                            "type" : "string",
+                            "typetext" : "<string>"
+                         },
++                        "qs_user" : {
++                           "description" : "QuantaStor user for API access",
++                           "optional" : 1,
++                           "type" : "string",
++                           "typetext" : "<string>"
++                        },
++                        "qs_password" : {
++                           "description" : "QuantaStor password for API access",
++                           "optional" : 1,
++                           "type" : "string",
++                           "typetext" : "<string>"
++                        },
++                        "qs_use_ssl" : {
++                           "description" : "QuantaStor API access via SSL",
++                           "optional" : 1,
++                           "type" : "boolean",
++                           "typetext" : "<boolean>"
++                        },
++                        "qs_apiv4_host" : {
++                           "description" : "QuantaStor API Host via IPv4",
++                           "format" : "address",
++                           "optional" : 1,
++                           "type" : "string",
++                           "typetext" : "<string>"
++                        },
+                         "content" : {
+                            "description" : "Allowed content types.\n\nNOTE: the value 'rootdir' is used for Containers, and value 'images' for VMs.\n",
+                            "format" : "pve-storage-content-list",
+@@ -60627,6 +60652,31 @@
+                      "optional" : 1,
+                      "type" : "string",
+                      "typetext" : "<string>"
++                  },
++                  "qs_user" : {
++                     "description" : "QuantaStor user for API access",
++                     "optional" : 1,
++                     "type" : "string",
++                     "typetext" : "<string>"
++                  },
++                  "qs_password" : {
++                     "description" : "QuantaStor password for API access",
++                     "optional" : 1,
++                     "type" : "string",
++                     "typetext" : "<string>"
++                  },
++                  "qs_use_ssl" : {
++                     "description" : "QuantaStor API access via SSL",
++                     "optional" : 1,
++                     "type" : "boolean",
++                     "typetext" : "<boolean>"
++                  },
++                  "qs_apiv4_host" : {
++                     "description" : "QuantaStor API Host via IPv4",
++                     "format" : "address",
++                     "optional" : 1,
++                     "type" : "string",
++                     "typetext" : "<string>"
+                   },
+                   "content" : {
+                      "description" : "Allowed content types.\n\nNOTE: the value 'rootdir' is used for Containers, and value 'images' for VMs.\n",
