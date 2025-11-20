@@ -4,9 +4,6 @@
 
 DO_CHECKSUM=0
 DO_ROLLBACK=0
-# default behavior is patch install
-FULL_COPY=0
-
 # backup dir
 BACKUP_DIR="/var/tmp/pve-quantastor-backup"
 
@@ -47,10 +44,10 @@ done
 
 
 # Use the full current working directory as the base source directory
-BASE_SOURCE_DIR="$(pwd)/src/new"
-SOURCE_DIR_PERL5="$BASE_SOURCE_DIR/PVE"
-SOURCE_DIR_JS="$BASE_SOURCE_DIR/pve-manager/js"
-SOURCE_DIR_APIDOC="$BASE_SOURCE_DIR/pve-docs/api-viewer"
+BASE_SOURCE_DIR="$(pwd)/src"
+SOURCE_DIR_PERL5="$BASE_SOURCE_DIR/perl5/PVE"
+SOURCE_DIR_JS="$BASE_SOURCE_DIR/js/pve-manager"
+SOURCE_DIR_APIDOC="$BASE_SOURCE_DIR/js/pve-docs/api-viewer"
 
 # Target directory
 TARGET_DIR_PERL5="/usr/share/perl5/PVE"
@@ -59,27 +56,19 @@ TARGET_DIR_APIDOC="/usr/share/pve-docs/api-viewer"
 
 # create an array of the source files and an array of the target files
 FILE_NAMES_PERL5=(
-    "Storage/ZFSPlugin"
-    "Storage/ZFSPoolPlugin"
-    "Storage/LunCmd/QuantaStorPlugin"
-    "Storage"
+    "Storage/ZFSPlugin.pm"
+    "Storage/ZFSPoolPlugin.pm"
+    "Storage/LunCmd/QuantaStorPlugin.pm"
+    "Storage.pm"
 )
 
 FILE_NAMES_JS=(
-    "pvemanagerlib"
+    "pvemanagerlib.js"
 )
 
 FILE_NAME_APIDOC=(
-    "apidoc"
+    "apidoc.js"
 )
-
-# Detect the current pve version
-# pveversion
-# pve-manager/9.1.1/42db4a6cf33dac83 (running kernel: 6.17.2-1-pve)
-# Get the raw version string
-raw_version=$(pveversion | awk -F'/' '{print $2}' | cut -d'-' -f1)
-
-echo "PVE version detected: $raw_version"
 
 # Backup function
 backup_files() {
@@ -125,11 +114,9 @@ copy_files() {
     local file_names=("${!1}")
     local src_dir="$2"
     local dest_dir="$3"
-    local version="$4"
-    local suffix="$5"
     for file in "${file_names[@]}"; do
         local src="$src_dir/$file"
-        local dest="$dest_dir/$file.$version$suffix"
+        local dest="$dest_dir/$file"
         if [[ -f "$src" ]]; then
             mkdir -p "$(dirname "$dest")"
             cp "$src" "$dest"
@@ -233,13 +220,13 @@ if [[ $DO_CHECKSUM -eq 1 ]]; then
 fi
 
 # copy files from Source to Target - perl5
-copy_files FILE_NAMES_PERL5[@] "$SOURCE_DIR_PERL5" "$TARGET_DIR_PERL5" "$raw_version" ".pm"
+copy_files FILE_NAMES_PERL5[@] "$SOURCE_DIR_PERL5" "$TARGET_DIR_PERL5"
 
 # copy files from Source to Target - js
-copy_files FILE_NAMES_JS[@] "$SOURCE_DIR_JS" "$TARGET_DIR_JS" "$raw_version" ".js"
+copy_files FILE_NAMES_JS[@] "$SOURCE_DIR_JS" "$TARGET_DIR_JS"
 
 # copy files from Source to Target - apidoc
-copy_files FILE_NAME_APIDOC[@] "$SOURCE_DIR_APIDOC" "$TARGET_DIR_APIDOC" "$raw_version" ".js"
+copy_files FILE_NAME_APIDOC[@] "$SOURCE_DIR_APIDOC" "$TARGET_DIR_APIDOC"
 
 if [[ $DO_CHECKSUM -eq 1 ]]; then
     # final hashes should match if the copy was successful
