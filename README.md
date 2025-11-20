@@ -5,11 +5,12 @@ This repository provides a Proxmox (PVE) storage plugin for QuantaStor, enabling
 
 ## Features
 - Integrates QuantaStor storage pools with Proxmox VE
+- Detects current PVE version and installs correct packages
 - Simple installation and rollback
 - Safe backup/restore of original Proxmox files
 
 ## Requirements
-- Proxmox VE 8.x or later
+- Proxmox VE 8.4 or later
 - Bash shell
 - Root privileges for installation
 
@@ -31,7 +32,7 @@ This repository provides a Proxmox (PVE) storage plugin for QuantaStor, enabling
 	```bash
 	sudo ./install-qs-pve.sh
 	```
-	- Perform a full copy install (overwrite all files):
+	- Perform a full copy install (overwrite all files). Default mode is patch install:
 	```bash
 	sudo ./install-qs-pve.sh --fullcopy
 	```
@@ -58,6 +59,8 @@ This repository provides a Proxmox (PVE) storage plugin for QuantaStor, enabling
 
 ## How it works
 - On first run, the script creates backups of all target files (except the new plugin file) in `/var/tmp/pve-quantastor-backup`.
+- The `--fullcopy` option overwrites full source files. The default behavior is patch based install.
+- The `--reversepatch` option reverses plugin patch files.
 - The `--rollback` option restores these files, undoing any changes made by the plugin.
 - The plugin file `Storage/LunCmd/QuantaStorPlugin.pm` is only added, never backed up or rolled back.
 
