@@ -71,4 +71,4 @@ sudo ./install-qs-pve.sh --rollback
 - If you encounter issues, check the backup directory at `/var/tmp/pve-quantastor-backup`.
 
 ## License
-See LICENSE file for details.
+See LICENSE file for details. Prerelease version will add license soon TODO
