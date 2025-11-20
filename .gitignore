@@ -1,0 +1,2 @@
+# Ignore patch source directories
+patches/**/src/
