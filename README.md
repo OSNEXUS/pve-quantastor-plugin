@@ -23,29 +23,38 @@ This repository provides a Proxmox (PVE) storage plugin for QuantaStor, enabling
 
 2. **Run the installer script:**
 
-	 The installer will:
-	 - Copy plugin files to the correct Proxmox directories
-	 - On first run, back up original files (except the new QuantaStor plugin file)
-	 - Optionally print checksums before/after install
+	The installer will:
+	- Copy plugin files to the correct Proxmox directories
+	- On first run, back up original files (except the new QuantaStor plugin file)
+	- Optionally print checksums before/after install
 
-	 ```bash
-	 sudo ./install-qs-pve.sh
-	 ```
+	```bash
+	sudo ./install-qs-pve.sh
+	```
+	- Perform a full copy install (overwrite all files):
+	```bash
+	sudo ./install-qs-pve.sh --fullcopy
+	```
 
-	 - To verify file integrity before/after install:
-		 ```bash
-		 sudo ./install-qs-pve.sh --checksum
-		 ```
+	- To verify file integrity before/after install:
+	```bash
+	sudo ./install-qs-pve.sh --checksum
+	```
 
-	 - To restore original files (rollback):
-		 ```bash
-		 sudo ./install-qs-pve.sh --rollback
-		 ```
+	- To restore original files (rollback):
+	```bash
+	sudo ./install-qs-pve.sh --rollback
+	```
 
-     - Reload services to use new source scripts:
-         ```bash
-		 sudo service pve-cluster restart && service pvedaemon restart && service pvestatd restart && service pveproxy restart
-		 ```
+	- To reverse plugin patches (reversepatch):
+	```bash
+	sudo ./install-qs-pve.sh --reversepatch
+	```
+
+    - Reload services to use new source scripts:
+    ```bash
+	sudo service pve-cluster restart && service pvedaemon restart && service pvestatd restart && service pveproxy restart
+	```
 
 ## How it works
 - On first run, the script creates backups of all target files (except the new plugin file) in `/var/tmp/pve-quantastor-backup`.
