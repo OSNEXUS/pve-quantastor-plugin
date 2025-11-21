@@ -5,7 +5,7 @@
 DO_CHECKSUM=0
 DO_ROLLBACK=0
 DO_REVERSE_PATCH=0
-# default behavior is patch install
+PATCH_INSTALL=0
 FULL_COPY=0
 
 # backup dir
@@ -22,6 +22,8 @@ usage() {
     echo ""
     echo "Usage: $0 [--checksum] [--rollback] [--help]"
     echo ""
+    echo "Options:"
+    echo "  --install      Perform a patch install"
     echo "  --fullcopy     Perform a full copy install (overwrite all files)"
     echo "  --checksum     Print sha256 hashes of source and target files before and after copy"
     echo "  --rollback     Restore files from backup (undo changes made by this script)"
@@ -36,6 +38,12 @@ usage() {
 
 for arg in "$@"; do
     case $arg in
+        --install)
+            PATCH_INSTALL=1
+            ;;
+        --fullcopy)
+            FULL_COPY=1
+            ;;
         --checksum)
             DO_CHECKSUM=1
             ;;
@@ -45,14 +53,22 @@ for arg in "$@"; do
         --reversepatch)
             DO_REVERSE_PATCH=1
             ;;
-        --fullcopy)
-            FULL_COPY=1
-            ;;
         --help|-h)
             usage
             ;;
     esac
 done
+
+# if no arguments are provided, show usage
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+fi
+
+if [[ $FULL_COPY -eq 1 && $PATCH_INSTALL -eq 1 ]]; then
+    echo "Error: --fullcopy and --install options cannot be used together."
+    exit 1
+fi
 
 
 # Use the full current working directory as the base source directory
@@ -108,11 +124,12 @@ backup_files() {
     local suffix="$3"
     for file in "${file_names[@]}"; do
         # Skip backup for QuantaStorPlugin.pm
-        if [[ "$file" == "Storage/LunCmd/QuantaStorPlugin.pm" ]]; then
+        if [[ "$file" == "Storage/LunCmd/QuantaStorPlugin" ]]; then
             continue
         fi
         local dest="$dest_dir/$file$suffix"
         if [[ -f "$dest" ]]; then
+            echo "Backing up: $dest"
             local backup_path="$BACKUP_DIR/$file$suffix.backup"
             mkdir -p "$(dirname "$backup_path")"
             cp "$dest" "$backup_path"
@@ -128,7 +145,7 @@ rollback_files() {
     local suffix="$3"
     for file in "${file_names[@]}"; do
         # Skip rollback for QuantaStorPlugin.pm
-        if [[ "$file" == "Storage/LunCmd/QuantaStorPlugin.pm" ]]; then
+        if [[ "$file" == "Storage/LunCmd/QuantaStorPlugin" ]]; then
             continue
         fi
         local backup_path="$BACKUP_DIR/$file$suffix.backup"
@@ -148,9 +165,10 @@ copy_files() {
     local src_dir="$2"
     local dest_dir="$3"
     local suffix="$4"
+
     for file in "${file_names[@]}"; do
-        local src="$src_dir/$file"
-        local dest="$dest_dir/$file.$PVE_VERSION$suffix"
+        local src="$src_dir/$file.$PVE_VERSION$suffix"
+        local dest="$dest_dir/$file$suffix"
         if [[ -f "$src" ]]; then
             mkdir -p "$(dirname "$dest")"
             cp "$src" "$dest"
@@ -166,14 +184,18 @@ apply_patches() {
     local src_dir="$2"
     local dest_dir="$3"
     local suffix="$4"
-    local src="$src_dir/$file.$PVE_VERSION$suffix"
-    local dest="$dest_dir/$file"
-    if [[ -f "$src" && -f "$dest" ]]; then
-        patch "$dest" < "$src"
-        echo "Patched: $dest with $src"
-    else
-        echo "Patch source or destination file not found: $src or $dest"
-    fi
+
+    for file in "${file_names[@]}"; do
+        echo "Applying patch to $file"
+        local src="$src_dir/$file.$PVE_VERSION$suffix.patch"
+        local dest="$dest_dir/$file$suffix"
+        if [[ -f "$src" && -f "$dest" ]]; then
+            patch "$dest" < "$src"
+            echo "Patched: $dest with $src"
+        else
+            echo "Patch source or destination file not found: $src or $dest"
+        fi
+    done
 }
 
 reverse_patches() {
@@ -181,14 +203,18 @@ reverse_patches() {
     local src_dir="$2"
     local dest_dir="$3"
     local suffix="$4"
-    local src="$src_dir/$file.$PVE_VERSION$suffix"
-    local dest="$dest_dir/$file"
-    if [[ -f "$src" && -f "$dest" ]]; then
-        patch -R "$dest" < "$src"
-        echo "Reversed patch: $dest with $src"
-    else
-        echo "Patch source or destination file not found: $src or $dest"
-    fi
+
+    for file in "${file_names[@]}"; do
+        echo "Reversing patch on $file"
+        local src="$src_dir/$file.$PVE_VERSION$suffix.patch"
+        local dest="$dest_dir/$file$suffix"
+        if [[ -f "$src" && -f "$dest" ]]; then
+            patch -R "$dest" < "$src"
+            echo "Reversed patch: $dest with $src"
+        else
+            echo "Patch source or destination file not found: $src or $dest"
+        fi
+    done
 }
 
 print_hashes() {
@@ -196,8 +222,15 @@ print_hashes() {
     local dir="$2"
     local suffix="$3"
     local version="$4"
+
+    if [[ -z "$version" ]]; then
+        version=""
+    else
+        version=".$version"
+    fi
+
     for file in "${file_names[@]}"; do
-        local path="$dir/$file.$version$suffix"
+        local path="$dir/$file$version$suffix"
         if [[ -f "$path" ]]; then
             sha256sum "$path"
         else
@@ -212,11 +245,15 @@ doPatchInstall() {
 
     # apply patches to other files as needed
     apply_patches FILE_PATCHES_PERL5[@] "$SOURCE_DIR_PATCHES_PERL5" "$TARGET_DIR_PERL5" ".pm"
+    apply_patches FILE_NAMES_JS[@] "$SOURCE_DIR_PATCHES_JS" "$TARGET_DIR_JS" ".js"
+    apply_patches FILE_NAME_APIDOC[@] "$SOURCE_DIR_PATCHES_APIDOC" "$TARGET_DIR_APIDOC" ".js"
 }
 
 doReversePatchInstall() {
     # reverse patches to other files as needed
     reverse_patches FILE_PATCHES_PERL5[@] "$SOURCE_DIR_PATCHES_PERL5" "$TARGET_DIR_PERL5" ".pm"
+    reverse_patches FILE_NAMES_JS[@] "$SOURCE_DIR_PATCHES_JS" "$TARGET_DIR_JS" ".js"
+    reverse_patches FILE_NAME_APIDOC[@] "$SOURCE_DIR_PATCHES_APIDOC" "$TARGET_DIR_APIDOC" ".js"
 }
 
 doFullCopyInstall() {
@@ -230,20 +267,31 @@ doFullCopyInstall() {
 
 doChecksum() {
     # perl5 files
+    echo "Source:"
     print_hashes FILE_NAMES_PERL5[@] "$SOURCE_DIR_PERL5" ".pm" "$PVE_VERSION"
+    echo "Destination:"
     print_hashes FILE_NAMES_PERL5[@] "$TARGET_DIR_PERL5" ".pm" ""
     echo "---------------------------------"
     # js files
+    echo "Source:"
     print_hashes FILE_NAMES_JS[@] "$SOURCE_DIR_JS" ".js" "$PVE_VERSION"
+    echo "Destination:"
     print_hashes FILE_NAMES_JS[@] "$TARGET_DIR_JS" ".js" ""
     echo "---------------------------------"
     # apidoc files
+    echo "Source:"
     print_hashes FILE_NAME_APIDOC[@] "$SOURCE_DIR_APIDOC" ".js" "$PVE_VERSION"
+    echo "Destination:"
     print_hashes FILE_NAME_APIDOC[@] "$TARGET_DIR_APIDOC" ".js" ""
     echo "---------------------------------"
 }
 
 # main
+if [[ -z $PVE_VERSION ]]; then
+    echo "Error: Unable to detect Proxmox VE version. Exiting."
+    exit 1
+fi
+
 # Handle rollback before any other operation
 if [[ $DO_ROLLBACK -eq 1 ]]; then
     echo "Rolling back files from $BACKUP_DIR..."
@@ -253,44 +301,29 @@ if [[ $DO_ROLLBACK -eq 1 ]]; then
     echo "Rollback complete."
     exit 0
 elif [[ $DO_REVERSE_PATCH -eq 1 ]]; then
+    # exit if patch command not found
+    if ! which patch >/dev/null 2>&1; then
+        echo "Error: 'patch' command not found. Exiting."
+        exit 1
+    fi
     echo "Reversing patches on target files..."
     doReversePatchInstall
     echo "Reverse patch complete."
     exit 0
+elif [[ $FULL_COPY -eq 0 ]]; then
+    # exit if patch command not found
+    if ! which patch >/dev/null 2>&1; then
+        echo "Error: 'patch' command not found. Exiting."
+        exit 1
+    fi
 fi
 
 # Only perform backup if BACKUP_DIR does not exist and no backup files exist
 should_backup=0
 if [[ ! -d "$BACKUP_DIR" ]]; then
     should_backup=1
-else
-    # Check if any backup file exists for any file
-    for file in "${FILE_NAMES_PERL5[@]}"; do
-        # Skip backup check for QuantaStorPlugin.pm
-        if [[ "$file" == "Storage/LunCmd/QuantaStorPlugin.pm" ]]; then
-            continue
-        fi
-        if [[ ! -f "$BACKUP_DIR/$file.backup" ]]; then
-            should_backup=1
-            break
-        fi
-    done
-    if [[ $should_backup -eq 0 ]]; then
-        for file in "${FILE_NAMES_JS[@]}"; do
-            if [[ ! -f "$BACKUP_DIR/$file.backup" ]]; then
-                should_backup=1
-                break
-            fi
-        done
-    fi
-    if [[ $should_backup -eq 0 ]]; then
-        for file in "${FILE_NAME_APIDOC[@]}"; do
-            if [[ ! -f "$BACKUP_DIR/$file.backup" ]]; then
-                should_backup=1
-                break
-            fi
-        done
-    fi
+elif [[ ! -f "$BACKUP_DIR/backup_complete.flag" ]]; then
+    should_backup=1
 fi
 
 if [[ $should_backup -eq 1 ]]; then
@@ -298,6 +331,7 @@ if [[ $should_backup -eq 1 ]]; then
     backup_files FILE_NAMES_PERL5[@] "$TARGET_DIR_PERL5" ".pm"
     backup_files FILE_NAMES_JS[@] "$TARGET_DIR_JS" ".js"
     backup_files FILE_NAME_APIDOC[@] "$TARGET_DIR_APIDOC" ".js"
+    touch "$BACKUP_DIR/backup_complete.flag"
     echo "Backup complete."
 fi
 

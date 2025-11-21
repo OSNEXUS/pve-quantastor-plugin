@@ -66997,7 +66997,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
             var vm = this.getViewModel();
             vm.set('isLIO', newVal === 'LIO');
             vm.set('isComstar', newVal === 'comstar');
-            vm.set('isQuantaStor', newVal === "quantastor");
+            vm.set('isQuantaStor', newVal === 'quantastor');
             vm.set('hasWriteCacheOption', newVal === 'comstar' || newVal === 'istgt');
             if (newVal !== 'quantastor') {
 		    	me.lookupReference('qs_use_ssl_field').setValue(true);
@@ -67015,7 +67015,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
         if (me.isCreate) {
             values.content = 'images';
         }
-        values.qs_confirmpw = values.qs_password;
+
         values.nowritecache = values.writecache ? 0 : 1;
         delete values.writecache;
 
@@ -67023,6 +67023,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
     },
 
     setValues: function (values) {
+        values.qs_confirmpw = values.qs_password;
         values.writecache = values.nowritecache ? 0 : 1;
         this.callParent([values]);
     },

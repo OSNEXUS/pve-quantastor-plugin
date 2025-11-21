@@ -13,6 +13,12 @@ This repository provides a Proxmox (PVE) storage plugin for QuantaStor, enabling
 - Proxmox VE 8.4 or later
 - Bash shell
 - Root privileges for installation
+- Install `patch` scripting dependency (not included by default on ProxmoxVE ISO)
+	```
+	# NOTE: `--fullcopy` option can still be used if patch is not installed.
+	sudo apt update
+	sudo apt install patch -y
+	```
 
 ## Installation
 

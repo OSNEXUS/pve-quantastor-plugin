@@ -1,5 +1,5 @@
---- ZFSPlugin.8.4.0.pm	2025-11-20 18:25:17.453050007 +0000
-+++ ZFSPlugin.8.4.0_new.pm	2025-11-20 19:20:58.594024461 +0000
+--- ZFSPlugin.8.4.0.pm	2025-11-21 23:21:50.455050022 +0000
++++ ZFSPlugin.8.4.0_new.pm	2025-11-21 23:21:50.455050022 +0000
 @@ -11,6 +11,7 @@
  use base qw(PVE::Storage::ZFSPoolPlugin);
  use PVE::Storage::LunCmd::Comstar;

@@ -1,5 +1,5 @@
---- pvemanagerlib.9.1.1.js	2025-11-20 19:38:51.430597911 +0000
-+++ pvemanagerlib.9.1.1_new.js	2025-11-20 20:20:40.660956641 +0000
+--- pvemanagerlib.9.1.1.js	2025-11-21 21:12:06.181467051 +0000
++++ pvemanagerlib.9.1.1_new.js	2025-11-21 21:12:06.189467065 +0000
 @@ -9840,6 +9840,7 @@
      alias: ['widget.pveiScsiProviderSelector'],
      comboItems: [
@@ -20,7 +20,7 @@
              var vm = this.getViewModel();
              vm.set('isLIO', newVal === 'LIO');
              vm.set('isComstar', newVal === 'comstar');
-+            vm.set('isQuantaStor', newVal === "quantastor");
++            vm.set('isQuantaStor', newVal === 'quantastor');
              vm.set('hasWriteCacheOption', newVal === 'comstar' || newVal === 'istgt');
 +            if (newVal !== 'quantastor') {
 +		    	me.lookupReference('qs_use_ssl_field').setValue(true);
@@ -32,15 +32,22 @@
          },
      },
  
-@@ -67005,7 +67015,7 @@
+@@ -67005,7 +67015,6 @@
          if (me.isCreate) {
              values.content = 'images';
          }
 -
-+        values.qs_confirmpw = values.qs_password;
          values.nowritecache = values.writecache ? 0 : 1;
          delete values.writecache;
  
+@@ -67013,6 +67022,7 @@
+     },
+ 
+     setValues: function (values) {
++        values.qs_confirmpw = values.qs_password;
+         values.writecache = values.nowritecache ? 0 : 1;
+         this.callParent([values]);
+     },
 @@ -67029,7 +67039,7 @@
                  allowBlank: false,
              },

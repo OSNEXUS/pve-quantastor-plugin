@@ -12,7 +12,7 @@ use PVE::RPCEnvironment;
 use base qw(PVE::Storage::ZFSPoolPlugin);
 use PVE::Storage::LunCmd::Comstar;
 use PVE::Storage::LunCmd::Istgt;
-+use PVE::Storage::LunCmd::QuantaStorPlugin;
+use PVE::Storage::LunCmd::QuantaStorPlugin;
 use PVE::Storage::LunCmd::Iet;
 use PVE::Storage::LunCmd::LIO;
 
@@ -33,12 +33,11 @@ my $lun_cmds = {
 my $zfs_unknown_scsi_provider = sub {
     my ($provider) = @_;
 
-    die "$provider: unknown iscsi provider. Available [comstar, istgt, iet, LIO, quantastor]";
+    die "$provider: unknown iscsi provider. Available [comstar, istgt, iet, LIO, quantastor] help me";
 };
 
 my $zfs_get_base = sub {
     my ($scfg) = @_;
-
     if ($scfg->{iscsiprovider} eq 'comstar') {
         return PVE::Storage::LunCmd::Comstar::get_base($scfg);
     } elsif ($scfg->{iscsiprovider} eq 'istgt') {
@@ -305,6 +304,8 @@ sub on_add_hook {
                 log_warn($message);
                 $base_path = '/dev/zvol';
             }
+        } elsif ($scfg->{iscsiprovider} eq 'quantastor') {
+            $base_path = PVE::Storage::LunCmd::QuantaStorPlugin::get_base($scfg);
         } else {
             $zfs_unknown_scsi_provider->($scfg->{iscsiprovider});
         }
@@ -480,15 +481,6 @@ sub volume_snapshot_rollback {
     $class->zfs_import_lu($scfg, $volname);
 
     $class->zfs_add_lun_mapping_entry($scfg, $volname);
-}
-
-sub volume_snapshot {
-    my ($class, $scfg, $storeid, $volname, $snap) = @_;
-    if ($scfg->{iscsiprovider} eq 'quantastor') {
-        PVE::Storage::LunCmd::QuantaStorPlugin::qs_volume_snapshot($scfg, $storeid, $volname, $snap);
-        return;
-    }
-    $class->SUPER::volume_snapshot($scfg, $storeid, $volname, $snap);
 }
 
 sub storage_can_replicate {
