@@ -5,13 +5,20 @@ This repository provides a Proxmox (PVE) storage plugin for QuantaStor, enabling
 
 ## Features
 - Integrates QuantaStor storage pools with Proxmox VE
+- Detects current PVE version and installs correct packages
 - Simple installation and rollback
 - Safe backup/restore of original Proxmox files
 
 ## Requirements
-- Proxmox VE 8.x or later
+- Proxmox VE 8.4 or later
 - Bash shell
 - Root privileges for installation
+- Install `patch` scripting dependency (not included by default on ProxmoxVE ISO)
+	```
+	# NOTE: `--fullcopy` option can still be used if patch is not installed.
+	sudo apt update
+	sudo apt install patch -y
+	```
 
 ## Installation
 
@@ -23,32 +30,43 @@ This repository provides a Proxmox (PVE) storage plugin for QuantaStor, enabling
 
 2. **Run the installer script:**
 
-	 The installer will:
-	 - Copy plugin files to the correct Proxmox directories
-	 - On first run, back up original files (except the new QuantaStor plugin file)
-	 - Optionally print checksums before/after install
+	The installer will:
+	- Copy plugin files to the correct Proxmox directories
+	- On first run, back up original files (except the new QuantaStor plugin file)
+	- Optionally print checksums before/after install
 
-	 ```bash
-	 sudo ./install-qs-pve.sh
-	 ```
+	```bash
+	sudo ./install-qs-pve.sh
+	```
+	- Perform a full copy install (overwrite all files). Default mode is patch install:
+	```bash
+	sudo ./install-qs-pve.sh --fullcopy
+	```
 
-	 - To verify file integrity before/after install:
-		 ```bash
-		 sudo ./install-qs-pve.sh --checksum
-		 ```
+	- To verify file integrity before/after install:
+	```bash
+	sudo ./install-qs-pve.sh --checksum
+	```
 
-	 - To restore original files (rollback):
-		 ```bash
-		 sudo ./install-qs-pve.sh --rollback
-		 ```
+	- To restore original files (rollback):
+	```bash
+	sudo ./install-qs-pve.sh --rollback
+	```
 
-     - Reload services to use new source scripts:
-         ```bash
-		 sudo service pve-cluster restart && service pvedaemon restart && service pvestatd restart && service pveproxy restart
-		 ```
+	- To reverse plugin patches (reversepatch):
+	```bash
+	sudo ./install-qs-pve.sh --reversepatch
+	```
+
+    - Reload services to use new source scripts:
+    ```bash
+	sudo service pve-cluster restart && service pvedaemon restart && service pvestatd restart && service pveproxy restart
+	```
 
 ## How it works
 - On first run, the script creates backups of all target files (except the new plugin file) in `/var/tmp/pve-quantastor-backup`.
+- The `--fullcopy` option overwrites full source files. The default behavior is patch based install.
+- The `--reversepatch` option reverses plugin patch files.
 - The `--rollback` option restores these files, undoing any changes made by the plugin.
 - The plugin file `Storage/LunCmd/QuantaStorPlugin.pm` is only added, never backed up or rolled back.
 
@@ -71,4 +89,4 @@ sudo ./install-qs-pve.sh --rollback
 - If you encounter issues, check the backup directory at `/var/tmp/pve-quantastor-backup`.
 
 ## License
-See LICENSE file for details.
+See LICENSE file for details. Prerelease version will add license soon TODO
