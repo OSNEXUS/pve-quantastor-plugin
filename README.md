@@ -34,15 +34,18 @@ This repository provides a Proxmox (PVE) storage plugin for QuantaStor, enabling
 	- Copy plugin files to the correct Proxmox directories
 	- On first run, back up original files (except the new QuantaStor plugin file)
 	- Optionally print checksums before/after install
+	- Optionally rollback to backup files or reverse patches.
 
+	- 'install' or 'fullcopy' option must be included to perform installation
 	```bash
-	sudo ./install-qs-pve.sh
+	sudo ./install-qs-pve.sh --install
 	```
-	- Perform a full copy install (overwrite all files). Default mode is patch install:
+	- Perform a full copy install (overwrite all files). Default install mode is patching:
 	```bash
 	sudo ./install-qs-pve.sh --fullcopy
 	```
 
+	- Note: checksums might not match when installing in patch mode due to minor differences. This option is mainly for developement using the 'fullcopy' install.
 	- To verify file integrity before/after install:
 	```bash
 	sudo ./install-qs-pve.sh --checksum
@@ -64,8 +67,10 @@ This repository provides a Proxmox (PVE) storage plugin for QuantaStor, enabling
 	```
 
 ## How it works
+- Runnning script with no args will print usage.
 - On first run, the script creates backups of all target files (except the new plugin file) in `/var/tmp/pve-quantastor-backup`.
-- The `--fullcopy` option overwrites full source files. The default behavior is patch based install.
+- The `--install` option executes patch based install.
+- The `--fullcopy` option overwrites full source files.
 - The `--reversepatch` option reverses plugin patch files.
 - The `--rollback` option restores these files, undoing any changes made by the plugin.
 - The plugin file `Storage/LunCmd/QuantaStorPlugin.pm` is only added, never backed up or rolled back.

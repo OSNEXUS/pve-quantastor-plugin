@@ -70,6 +70,17 @@ if [[ $FULL_COPY -eq 1 && $PATCH_INSTALL -eq 1 ]]; then
     exit 1
 fi
 
+# if neither are provided, log that no installation will be performed
+if [[ $FULL_COPY -eq 0 && $PATCH_INSTALL -eq 0 ]]; then
+    echo "No installation mode specified 'install' or 'fullcopy'. Installation will not be performed."
+fi
+
+# if rollback or reverspatch is specified, ignore installation options
+if [[ $DO_ROLLBACK -eq 1 || $DO_REVERSE_PATCH -eq 1 ]]; then
+    echo "WARNING: Rollback or Reverse Patch option specified. Installation options will be ignored."
+    PATCH_INSTALL=0
+    FULL_COPY=0
+fi
 
 # Use the full current working directory as the base source directory
 BASE_SOURCE_DIR="$(pwd)/src"
@@ -345,7 +356,7 @@ fi
 # installation
 if [[ $FULL_COPY -eq 1 ]]; then
     doFullCopyInstall
-else
+elif [[ $PATCH_INSTALL -eq 1 ]]; then
     # Patch install mode - default
     doPatchInstall
 fi
