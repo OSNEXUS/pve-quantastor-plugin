@@ -742,7 +742,12 @@ sub qs_zfs_get_command {
     my ($scfg, $timeout, $method, @params) = @_;
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_zfs_get_command - called with (method: '$method'; params '@params')");
     my $param_str = join(' ', @params);
-    my ($uuid) = $param_str =~ /qs-([0-9a-fA-F-]{36})/;
+    # Try to extract the UUID even if there are spaces or other characters
+    my ($uuid) = $param_str =~ /qs-?\s*([0-9a-fA-F-]{36})/;
+    unless ($uuid) {
+        # Try a more permissive match if the above fails
+        ($uuid) = $param_str =~ /([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/;
+    }
 
     my $res_pool_get = qs_storage_pool_get($scfg->{qs_apiv4_host},
                                             $scfg->{qs_username},
