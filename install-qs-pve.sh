@@ -124,7 +124,16 @@ FILE_NAME_APIDOC=(
 # pveversion
 # pve-manager/9.1.1/42db4a6cf33dac83 (running kernel: 6.17.2-1-pve)
 # Get the raw version string
-PVE_VERSION=$(pveversion | awk -F'/' '{print $2}' | cut -d'-' -f1)
+# Get full version string, e.g., "9.1.2"
+PVE_VERSION_FULL=$(pveversion | awk -F'/' '{print $2}' | cut -d'-' -f1)
+# Extract major.minor, e.g., "9.1"
+PVE_VERSION_MAJOR_MINOR=$(echo "$PVE_VERSION_FULL" | awk -F'.' '{print $1"."$2}')
+# Extract patch version, e.g., "2"
+PVE_VERSION_PATCH=$(echo "$PVE_VERSION_FULL" | awk -F'.' '{print $3}')
+
+# Use $PVE_VERSION_MAJOR_MINOR for file selection, and log the full version
+PVE_VERSION="$PVE_VERSION_MAJOR_MINOR"
+echo "PVE version detected: $PVE_VERSION_FULL (major.minor: $PVE_VERSION, patch: $PVE_VERSION_PATCH)"
 
 echo "PVE version detected: $PVE_VERSION"
 
