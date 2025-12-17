@@ -33,11 +33,12 @@ my $lun_cmds = {
 my $zfs_unknown_scsi_provider = sub {
     my ($provider) = @_;
 
-    die "$provider: unknown iscsi provider. Available [comstar, istgt, iet, LIO, quantastor] help me";
+    die "$provider: unknown iscsi provider. Available [comstar, istgt, iet, LIO, quantastor]";
 };
 
 my $zfs_get_base = sub {
     my ($scfg) = @_;
+
     if ($scfg->{iscsiprovider} eq 'comstar') {
         return PVE::Storage::LunCmd::Comstar::get_base($scfg);
     } elsif ($scfg->{iscsiprovider} eq 'istgt') {
@@ -340,9 +341,11 @@ sub path {
 
 sub qemu_blockdev_options {
     my ($class, $scfg, $storeid, $volname, $machine_version, $options) = @_;
-
     die "direct access to snapshots not implemented\n"
         if $options->{'snapshot-name'};
+    if ($scfg->{iscsiprovider} eq 'quantastor') {
+        return PVE::Storage::LunCmd::QuantaStorPlugin::qs_qemu_blockdev_options($scfg, $storeid, $volname, $machine_version, $options);
+    }
 
     my $name = ($class->parse_volname($volname))[1];
     my $guid = $class->zfs_get_lu_name($scfg, $name);

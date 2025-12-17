@@ -57,26 +57,33 @@ sub get_base {
 sub qs_path {
     my ($scfg, $volname, $storeid, $snapname) = @_;
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_path called for volname: $volname");
+    #e.g. iscsi://10.0.26.215/iqn.2009-10.com.osnexus:7b6f4eb4-2f14af41e215fa3a:vm-100-disk-0/1
+    my $path = "iscsi://$scfg->{portal}/";
 
     my ($vtype, $name, $vmid) = qs_parse_volname($volname);
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_path - parsed volname: vtype=$vtype, name=$name, vmid=$vmid");
-    #e.g. iscsi://10.0.26.215/iqn.2009-10.com.osnexus:7b6f4eb4-2f14af41e215fa3a:vm-100-disk-0/1
-    my $path = "iscsi://$scfg->{portal}/";
-    #trim qs- from pool name
-    $storeid = $scfg->{pool};
-    $storeid =~ s/^qs-//;
-    my $searchParams = "=name:$name,=storagePoolId:$storeid";
-    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
-                                            $scfg->{qs_password},
-                                            '',
-                                            300,
-                                            $searchParams);
-    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
+    my $res_vol_obj = qs_get_vol_obj_by_name($scfg,$volname);
     $path .= "$res_vol_obj->{iqn}/0";
 
     # get the iqn for the given volume
     return ($path, $vmid, $vtype);
+}
+
+sub qs_qemu_blockdev_options {
+    my ($scfg, $storeid, $volname, $machine_version, $options) = @_;
+
+    die "direct access to snapshots not implemented\n"
+        if $options->{'snapshot-name'};
+
+    my $res_vol_obj = qs_get_vol_obj_by_name($scfg,$volname);
+
+    return {
+        driver => 'iscsi',
+        transport => 'tcp',
+        portal => "$scfg->{portal}",
+        target => "$res_vol_obj->{iqn}",
+        lun => 0,
+    };
 }
 
 sub qs_parse_volname {
@@ -90,6 +97,23 @@ sub qs_parse_volname {
     }
 
     die "unable to parse zfs volume name '$volname'\n";
+}
+
+sub qs_get_vol_obj_by_name {
+    my ($scfg,$volname) = @_;
+    my ($vtype, $name, $vmid) = qs_parse_volname($volname);
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_get_vol_obj_by_name - parsed volname: vtype=$vtype, name=$name, vmid=$vmid");
+    #trim qs- from pool name
+    my $storeid = $scfg->{pool};
+    $storeid =~ s/^qs-//;
+    my $searchParams = "=name:$name,=storagePoolId:$storeid";
+    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_username},
+                                            $scfg->{qs_password},
+                                            '',
+                                            300,
+                                            $searchParams);
+    return qs_get_object_from_search_response($res_vol_search);
 }
 
 sub qs_api_call {
@@ -430,7 +454,7 @@ sub qs_host_remove {
 #
 sub run_lun_command {
     my ($scfg, $timeout, $method, @params) = @_;
-    qs_write_to_log("LunCmd/QuantaStor.pm - run_lun_command '$method'");
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm - run_lun_command '$method'");
 
     if (!defined($scfg->{'qs_user'}) || !defined($scfg->{'qs_password'})) {
         die "Undefined `qs_user` and/or `qs_password` variables.";
@@ -451,10 +475,15 @@ sub run_lun_command {
     if($method eq "add_view") {
         return run_add_view($scfg, $timeout, $method, @params);
     }
+    if($method eq "list_view") {
+        qs_write_to_log("LunCmd/QuantaStorPlugin.pm - executing '$method'");
+        return run_list_lu($scfg, $timeout, $method, "lun-id", @params);
+    }
     if($method eq "list_lu") {
         return run_list_lu($scfg, $timeout, $method, "name", @params);
     }
 
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm - run_lun_command method was undefined: '$method'");
     return undef;
 }
 
