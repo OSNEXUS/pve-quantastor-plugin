@@ -521,14 +521,7 @@ sub run_list_lu {
 
     my ($qs_pool_id, $zvol_name) = qs_parse_lun_path($object);
     qs_write_to_log("LunCmd/QuantaStor.pm - run_list_lu - requested object: '$object', zvol_name: '$zvol_name'");
-    my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
-    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_user},
-                                            $scfg->{qs_password},
-                                            '',
-                                            300,
-                                            $searchParams);
-    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
+    my $res_vol_obj = qs_get_vol_obj_by_name($scfg,$zvol_name);
     # happy path
     if (defined($res_vol_obj->{lun}) && defined($res_vol_obj->{id})) {
         if ($result_value_type eq "lun-id") {
@@ -559,14 +552,7 @@ sub run_create_lu {
 
     qs_write_to_log("LunCmd/QuantaStor.pm - ZVOL Name: $zvol_name");
     # make storageVolumeSearch call to get the quantastor UUID and iqn of the zvol
-    my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
-    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_user},
-                                            $scfg->{qs_password},
-                                            '',
-                                            300,
-                                            $searchParams);
-    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
+    my $res_vol_obj = qs_get_vol_obj_by_name($scfg,$zvol_name);
     # check to make sure the zvol exists
     if (!defined($res_vol_obj->{id})) {
         die "LUN $zvol_name does not exist.";
@@ -603,14 +589,7 @@ sub run_delete_lu {
 
     my ($qs_pool_id, $zvol_name) = qs_parse_lun_path($lun_path);
 
-    my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
-    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_user},
-                                            $scfg->{qs_password},
-                                            '',
-                                            300,
-                                            $searchParams);
-    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
+    my $res_vol_obj = qs_get_vol_obj_by_name($scfg,$zvol_name);
     if (!defined($res_vol_obj->{id})) {
         die "LUN $zvol_name does not exist.";
     }
@@ -1041,18 +1020,12 @@ sub qs_zfs_delete_zvol {
 
     my $err;
     my ($qs_pool_id, $zvol_name) = qs_parse_lun_path($zvol);
-    $qs_pool_id = $scfg->{pool};
-    $qs_pool_id =~ s/^qs-//;
-
-    my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
-    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_user},
-                                            $scfg->{qs_password},
-                                            '',
-                                            300,
-                                            $searchParams);
-    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
+    my $res_vol_obj = qs_get_vol_obj_by_name($scfg,$zvol_name);
     # we need to do error checking here. aginst the json response.
+    if (!defined($res_vol_obj->{id})) {
+        qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_zfs_delete_zvol - zvol: '$zvol_name' does not exist.");
+        return;
+    }
 
     # remove the zvol
     my $res_storage_volume_delete = qs_storage_volume_delete($scfg->{qs_apiv4_host},
@@ -1080,19 +1053,14 @@ sub qs_zfs_delete_zvol {
 }
 
 sub qs_get_zvol_id_by_name {
-    my ($scfg, $zvol_name, $pool) = @_;
+    my ($scfg, $zvol_name) = @_;
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_get_zvol_id_by_name - called with (zvol_name: '$zvol_name')");
 
-    # trim qs- from pool name
-    $pool =~ s/^qs-//;
-    my $searchParams = "=name:$zvol_name,=storagePoolId:$pool";
-    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_user},
-                                            $scfg->{qs_password},
-                                            '',
-                                            300,
-                                            $searchParams);
-    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
+    my $res_vol_obj = qs_get_vol_obj_by_name($scfg,$zvol_name);
+    # verify we have a valid response
+    if (!defined($res_vol_obj->{id})) {
+        die "ZVOL $zvol_name does not exist.";
+    }
 
     return $res_vol_obj->{id};
 }
@@ -1106,16 +1074,7 @@ sub qs_create_base {
 
     # get the storage volume info from quantastor
     # verify the zvol exists.
-    my $pool_id = $scfg->{pool};
-    $pool_id =~ s/^qs-//;
-    my $searchParams = "=name:$volname,=storagePoolId:$pool_id";
-    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_user},
-                                            $scfg->{qs_password},
-                                            '',
-                                            300,
-                                            $searchParams);
-    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
+    my $res_vol_obj = qs_get_vol_obj_by_name($scfg,$zvol_name);
 
     # logout of iscsi targets before renaming
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - logging out of $volname iqn $res_vol_obj->{iqn}");
@@ -1197,16 +1156,7 @@ sub qs_clone_image {
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_clone_image - $name is the new disk name");
     # get the storage volume info from quantastor
     # verify the zvol exists.
-    my $pool_id = $scfg->{pool};
-    $pool_id =~ s/^qs-//;
-    my $searchParams = "=name:$srcvolname,=storagePoolId:$pool_id";
-    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_user},
-                                            $scfg->{qs_password},
-                                            '',
-                                            300,
-                                            $searchParams);
-    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
+    my $res_vol_obj = qs_get_vol_obj_by_name($scfg,$srcvolname);
 
     #if the volume target does not exist, we cannot clone it.
     if (!defined($res_vol_obj->{id})) {
@@ -1335,16 +1285,7 @@ sub qs_volume_snapshot_rollback {
     my $snap_name = $vname . "_$snap";
 
     # logout of iscsi target
-    my $pool_id = $scfg->{pool};
-    $pool_id =~ s/^qs-//;
-    my $searchParams = "=name:$vname,=storagePoolId:$pool_id";
-    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_user},
-                                            $scfg->{qs_password},
-                                            '',
-                                            300,
-                                            $searchParams);
-    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
+    my $res_vol_obj = qs_get_vol_obj_by_name($scfg, $vname);
 
     my $res_logout = qs_iscsi_target_logout($scfg, $res_vol_obj->{iqn});
     wait_for_volume_logout($scfg, $res_vol_obj->{id});
@@ -1434,16 +1375,7 @@ sub qs_volume_rollback_is_possible {
     my $snap_name = $vname . "_$snap";
 
     # check to see if this snapshot exists on the qs host
-    my $pool_id = $scfg->{pool};
-    $pool_id =~ s/^qs-//;
-    my $searchParams = "=name:$snap_name,=storagePoolId:$pool_id";
-    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_user},
-                                            $scfg->{qs_password},
-                                            '',
-                                            300,
-                                            $searchParams);
-    my $res_vol_obj = qs_get_object_from_search_response($res_vol_search);
+    my $res_vol_obj = qs_get_vol_obj_by_name($scfg, $snap_name);
 
     if (!defined($res_vol_obj->{id})) {
         die "can't rollback, snapshot '$snap' does not exist on '$volname'\n";
