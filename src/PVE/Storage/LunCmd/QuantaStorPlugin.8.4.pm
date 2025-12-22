@@ -67,7 +67,7 @@ sub qs_path {
     $storeid =~ s/^qs-//;
     my $searchParams = "=name:$name,=storagePoolId:$storeid";
     my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -492,7 +492,7 @@ sub run_list_lu {
     qs_write_to_log("LunCmd/QuantaStor.pm - run_list_lu - requested object: '$object', zvol_name: '$zvol_name'");
     my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
     my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -530,7 +530,7 @@ sub run_create_lu {
     # make storageVolumeSearch call to get the quantastor UUID and iqn of the zvol
     my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
     my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -548,10 +548,10 @@ sub run_create_lu {
     my $local_host_iqn = get_initiator_name();
 
     # make hostGet call to get the UUID of the quantastor host entry for the local host iqn
-    my $res_host_get = qs_host_get($scfg->{qs_apiv4_host}, $scfg->{qs_username}, $scfg->{qs_password}, '', 300, $local_host_iqn);
+    my $res_host_get = qs_host_get($scfg->{qs_apiv4_host}, $scfg->{qs_user}, $scfg->{qs_password}, '', 300, $local_host_iqn);
 
     # make storageVolumeAclAddRemoveEx call to add the zvol access for the local host
-    my $res_host_acl_add = qs_storage_volume_acl_add($scfg->{qs_apiv4_host}, $scfg->{qs_username}, $scfg->{qs_password}, '', 300, $zvol_uuid, $local_host_iqn);
+    my $res_host_acl_add = qs_storage_volume_acl_add($scfg->{qs_apiv4_host}, $scfg->{qs_user}, $scfg->{qs_password}, '', 300, $zvol_uuid, $local_host_iqn);
 
     # we need to iscsi target login here.
     # iscsiadm -m node --targetname iqn.2009-10.com.osnexus:7b6f4eb4-2f14af41e215fa3a:vm-100-disk-0 --portal 10.0.26.215 --login
@@ -574,7 +574,7 @@ sub run_delete_lu {
 
     my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
     my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -587,14 +587,14 @@ sub run_delete_lu {
     # remove acl entry for local host
     my $local_host_iqn = get_initiator_name();
     my $res_host_get = qs_host_get($scfg->{qs_apiv4_host},
-                                        $scfg->{qs_username},
+                                        $scfg->{qs_user},
                                         $scfg->{qs_password},
                                         '',
                                         300,
                                         $local_host_iqn);
 
     my $res_host_acl_remove = qs_storage_volume_acl_remove($scfg->{qs_apiv4_host},
-                                                            $scfg->{qs_username},
+                                                            $scfg->{qs_user},
                                                             $scfg->{qs_password},
                                                             '',
                                                             300,
@@ -735,7 +735,7 @@ sub qs_zfs_create_zvol {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_create_zvol - creating zvol: $zvol with size: $size, pool: $scfg->{pool}");
     my $trim_pool_name = $scfg->{pool};
     $trim_pool_name =~ s/^qs-//;
-    my $create_response = qs_storage_volume_create($scfg->{qs_apiv4_host}, $scfg->{qs_username}, $scfg->{qs_password}, '', 300, $zvol, $size, $trim_pool_name);
+    my $create_response = qs_storage_volume_create($scfg->{qs_apiv4_host}, $scfg->{qs_user}, $scfg->{qs_password}, '', 300, $zvol, $size, $trim_pool_name);
 }
 
 sub qs_zfs_get_command {
@@ -745,7 +745,7 @@ sub qs_zfs_get_command {
     my ($uuid) = $param_str =~ /qs-([0-9a-fA-F-]{36})/;
 
     my $res_pool_get = qs_storage_pool_get($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -783,7 +783,7 @@ sub activate_storage {
     my $description = "Host added by Proxmox PVE QuantaStor plug-in.";
 
     # Step 1: try to fetch the host
-    my $res_host_get = qs_host_get($scfg->{qs_apiv4_host}, $scfg->{qs_username}, $scfg->{qs_password}, '', 300, $iqn);
+    my $res_host_get = qs_host_get($scfg->{qs_apiv4_host}, $scfg->{qs_user}, $scfg->{qs_password}, '', 300, $iqn);
 
     my $hostId;
 
@@ -800,7 +800,7 @@ sub activate_storage {
 
                 my $res_host_add = qs_host_add(
                     $scfg->{qs_apiv4_host},
-                    $scfg->{qs_username},
+                    $scfg->{qs_user},
                     $scfg->{qs_password},
                     '',
                     300,
@@ -884,7 +884,7 @@ sub qs_zfs_list_zvol {
 
     # json response list of storage volumes
     qs_write_to_log("LunCmd/QuantaStorPlugin.pm  - making storage volume enum call using storage config host : $scfg->{qs_apiv4_host}");
-    my $res_volume_enum = qs_storage_volume_enum($scfg->{qs_apiv4_host}, $scfg->{qs_username}, $scfg->{qs_password}, '', 300, '');
+    my $res_volume_enum = qs_storage_volume_enum($scfg->{qs_apiv4_host}, $scfg->{qs_user}, $scfg->{qs_password}, '', 300, '');
     my $zvols = qs_zfs_parse_zvol_list($res_volume_enum, $scfg->{pool});
 
     my $list = {};
@@ -951,7 +951,7 @@ sub qs_zfs_delete_zvol {
 
     my $searchParams = "=name:$zvol_name,=storagePoolId:$qs_pool_id";
     my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -961,7 +961,7 @@ sub qs_zfs_delete_zvol {
 
     # remove the zvol
     my $res_storage_volume_delete = qs_storage_volume_delete($scfg->{qs_apiv4_host},
-                                                            $scfg->{qs_username},
+                                                            $scfg->{qs_user},
                                                             $scfg->{qs_password},
                                                             '',
                                                             300,
@@ -979,7 +979,7 @@ sub qs_get_zvol_id_by_name {
     $pool =~ s/^qs-//;
     my $searchParams = "=name:$zvol_name,=storagePoolId:$pool";
     my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -999,7 +999,7 @@ sub qs_create_base {
     # get the storage volume info from quantastor
     # verify the zvol exists.
     my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -1013,14 +1013,14 @@ sub qs_create_base {
     # remove storage volume acl entry for local host
     my $local_host_iqn = get_initiator_name();
     my $res_host_get = qs_host_get($scfg->{qs_apiv4_host},
-                                   $scfg->{qs_username},
+                                   $scfg->{qs_user},
                                    $scfg->{qs_password},
                                    '',
                                    300,
                                    $local_host_iqn);
 
     my $res_host_acl_remove = qs_storage_volume_acl_remove($scfg->{qs_apiv4_host},
-                                                            $scfg->{qs_username},
+                                                            $scfg->{qs_user},
                                                             $scfg->{qs_password},
                                                             '',
                                                             300,
@@ -1030,7 +1030,7 @@ sub qs_create_base {
     # modify the volname of the volume via qs API
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - modifying volume name from $volname to $newname");
     my $res_volume_modify = qs_storage_volume_modify($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -1039,7 +1039,7 @@ sub qs_create_base {
 
     # add storage volume acl entry for local host
     my $res_host_acl_add = qs_storage_volume_acl_add($scfg->{qs_apiv4_host},
-                                                     $scfg->{qs_username},
+                                                     $scfg->{qs_user},
                                                      $scfg->{qs_password},
                                                      '',
                                                      300,
@@ -1052,7 +1052,7 @@ sub qs_create_base {
 
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - taking snapshot of new base volume $newname");
     my $res_volume_snapshot = qs_storage_volume_snapshot($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -1081,7 +1081,7 @@ sub qs_clone_image {
     # get the storage volume info from quantastor
     # verify the zvol exists.
     my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -1089,7 +1089,7 @@ sub qs_clone_image {
 
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_clone_image - cloning snapshot $srcvolname to new volume $name");
     my $res_volume_clone = qs_storage_volume_clone($scfg->{qs_apiv4_host},
-                                                   $scfg->{qs_username},
+                                                   $scfg->{qs_user},
                                                    $scfg->{qs_password},
                                                    '',
                                                    300,
@@ -1099,14 +1099,14 @@ sub qs_clone_image {
     # add storage volume acl entry for local host
     my $local_host_iqn = get_initiator_name();
     my $res_host_get = qs_host_get($scfg->{qs_apiv4_host},
-                                   $scfg->{qs_username},
+                                   $scfg->{qs_user},
                                    $scfg->{qs_password},
                                    '',
                                    300,
                                    $local_host_iqn);
 
     my $res_host_acl_add = qs_storage_volume_acl_add($scfg->{qs_apiv4_host},
-                                                     $scfg->{qs_username},
+                                                     $scfg->{qs_user},
                                                      $scfg->{qs_password},
                                                      '',
                                                      300,
@@ -1179,7 +1179,7 @@ sub qs_volume_snapshot {
     my $snap_name = $vname . "_$snap";
 
     my $res_volume_snapshot = qs_storage_volume_snapshot($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -1195,7 +1195,7 @@ sub qs_volume_snapshot_delete {
     qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_volume_snapshot_delete - called with (snap_name: '$snap_name')");
 
     my $res_volume_snapshot_delete = qs_storage_volume_delete($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -1210,7 +1210,7 @@ sub qs_volume_snapshot_rollback {
 
     # logout of iscsi target
     my $res_vol_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -1221,7 +1221,7 @@ sub qs_volume_snapshot_rollback {
 
     # run rollback
     my $res_volume_rollback = qs_storage_volume_rollback($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -1256,7 +1256,7 @@ sub wait_for_volume_logout {
     while ($elapsed < $max_wait) {
         my $response = qs_storage_volume_session_enum(
             $scfg->{qs_apiv4_host},
-            $scfg->{qs_username},
+            $scfg->{qs_user},
             $scfg->{qs_password},
             '',
             30,
@@ -1305,7 +1305,7 @@ sub qs_volume_rollback_is_possible {
 
     # check to see if this snapshot exists on the qs host
     my $res_volume_get = qs_storage_volume_get($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
@@ -1318,7 +1318,7 @@ sub qs_volume_rollback_is_possible {
     # we need to see if this snapshot is the most recent snapshot
     # taken on this volume.
     my $res_storage_volume_enum = qs_storage_volume_enum($scfg->{qs_apiv4_host},
-                                            $scfg->{qs_username},
+                                            $scfg->{qs_user},
                                             $scfg->{qs_password},
                                             '',
                                             300,
