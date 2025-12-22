@@ -1106,7 +1106,7 @@ sub qs_create_base {
 
     # get the storage volume info from quantastor
     # verify the zvol exists.
-    my $res_vol_obj = qs_get_vol_obj_by_name($scfg,$zvol_name);
+    my $res_vol_obj = qs_get_vol_obj_by_name($scfg,$volname);
 
     # logout of iscsi targets before renaming
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - logging out of $volname iqn $res_vol_obj->{iqn}");
