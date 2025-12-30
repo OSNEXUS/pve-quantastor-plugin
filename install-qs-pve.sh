@@ -338,20 +338,23 @@ elif [[ $FULL_COPY -eq 0 ]]; then
     fi
 fi
 
-# Only perform backup if BACKUP_DIR does not exist and no backup files exist
+# Only perform backup if BACKUP_DIR does not exist or backup version does not match current version
 should_backup=0
 if [[ ! -d "$BACKUP_DIR" ]]; then
     should_backup=1
 elif [[ ! -f "$BACKUP_DIR/backup_complete.flag" ]]; then
     should_backup=1
+elif [[ "$(cat "$BACKUP_DIR/backup_complete.flag")" != "$PVE_VERSION_FULL" ]]; then
+    # If the version doesn't match, we need to backup again and update the backup version
+    should_backup=1
 fi
 
 if [[ $should_backup -eq 1 ]]; then
-    echo "First run detected: backing up target files to $BACKUP_DIR..."
+    echo "First run or PVE upgrade detected: backing up target files to $BACKUP_DIR..."
     backup_files FILE_NAMES_PERL5[@] "$TARGET_DIR_PERL5" ".pm"
     backup_files FILE_NAMES_JS[@] "$TARGET_DIR_JS" ".js"
     backup_files FILE_NAME_APIDOC[@] "$TARGET_DIR_APIDOC" ".js"
-    touch "$BACKUP_DIR/backup_complete.flag"
+    echo "$PVE_VERSION_FULL" > "$BACKUP_DIR/backup_complete.flag"
     echo "Backup complete."
 fi
 
