@@ -21,6 +21,7 @@ our $QS_VERBOSE = 0;
 
 our $QS_CA_BUNDLE = "/etc/ssl/certs/qs-ca-certificates.crt";
 
+# TODO: need to add log rotation
 sub qs_write_to_log {
     my ($msg) = @_;
     return if !$QS_DEBUG;
@@ -87,7 +88,8 @@ sub qs_parse_volname {
     my ($volname) = @_;
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_parse_volname $volname");
 
-    if ($volname =~ m/^(((base|basevol)-(\d+)-\S+)\/)?((base|basevol|vm|subvol)-(\d+)-\S+)$/) {
+    # template-base-100-disk-0 is also a valid name
+    if ($volname =~ m/^(((template-base|base|basevol)-(\d+)-\S+)\/)?((template-base|base|basevol|vm|subvol)-(\d+)-\S+)$/) {
 	my $format = ($6 eq 'subvol' || $6 eq 'basevol') ? 'subvol' : 'raw';
 	my $isBase = ($6 eq 'base' || $6 eq 'basevol');
 	return ('images', $5, $7, $2, $4, $isBase, $format);
@@ -1181,19 +1183,20 @@ sub qs_create_base {
                                             $newname);
 
     # add storage volume acl entry for local host
+    # res_volume_modify is the new json zvol object
     my $res_host_acl_add = qs_storage_volume_acl_add($scfg->{qs_apiv4_host},
                                                      $scfg->{qs_user},
                                                      $scfg->{qs_password},
                                                      300,
-                                                     $res_vol_obj->{id},
+                                                     $res_volume_modify->{obj}{id},
                                                      $local_host_iqn);
 
     # login to modified iscsi target
-    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - logging in to $newname iqn $res_volume_modify->{iqn}");
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - logging in to $newname iqn $res_volume_modify->{obj}{iqn}");
     my $res_login = qs_iscsi_target_login($scfg, $res_volume_modify->{obj}{iqn});
-    my $available = wait_for_volume_available($scfg, $res_vol_obj, 300);
+    my $available = wait_for_volume_available($scfg, $res_volume_modify->{obj}, 300);
     if (!$available) {
-        die "CREATE BASE: Timeout waiting for volume to become available after iSCSI login (IQN: $res_vol_obj->{iqn})";
+        die "CREATE BASE: Timeout waiting for volume to become available after iSCSI login (IQN: $res_volume_modify->{obj}{iqn})";
     }
 
     PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("LunCmd/QuantaStorPlugin.pm - create_base - taking snapshot of new base volume $newname");
