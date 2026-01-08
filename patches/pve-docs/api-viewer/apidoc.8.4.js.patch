@@ -1,6 +1,6 @@
---- apidoc.8.4.0.js	2025-11-20 19:38:59.614601306 +0000
-+++ apidoc.8.4.0_new.js	2025-11-20 19:46:30.346965794 +0000
-@@ -60092,6 +60092,31 @@
+--- apidoc.8.4.0.js	2025-11-21 23:21:50.471050049 +0000
++++ apidoc.8.4.0_new.js	2026-01-07 23:59:27.020456325 +0000
+@@ -60092,6 +60092,25 @@
                             "type" : "string",
                             "typetext" : "<string>"
                          },
@@ -16,12 +16,6 @@
 +                           "type" : "string",
 +                           "typetext" : "<string>"
 +                        },
-+                        "qs_use_ssl" : {
-+                           "description" : "QuantaStor API access via SSL",
-+                           "optional" : 1,
-+                           "type" : "boolean",
-+                           "typetext" : "<boolean>"
-+                        },
 +                        "qs_apiv4_host" : {
 +                           "description" : "QuantaStor API Host via IPv4",
 +                           "format" : "address",
@@ -32,7 +26,7 @@
                          "content" : {
                             "description" : "Allowed content types.\n\nNOTE: the value 'rootdir' is used for Containers, and value 'images' for VMs.\n",
                             "format" : "pve-storage-content-list",
-@@ -60627,6 +60652,31 @@
+@@ -60627,6 +60646,25 @@
                       "optional" : 1,
                       "type" : "string",
                       "typetext" : "<string>"
@@ -48,12 +42,6 @@
 +                     "optional" : 1,
 +                     "type" : "string",
 +                     "typetext" : "<string>"
-+                  },
-+                  "qs_use_ssl" : {
-+                     "description" : "QuantaStor API access via SSL",
-+                     "optional" : 1,
-+                     "type" : "boolean",
-+                     "typetext" : "<boolean>"
 +                  },
 +                  "qs_apiv4_host" : {
 +                     "description" : "QuantaStor API Host via IPv4",
