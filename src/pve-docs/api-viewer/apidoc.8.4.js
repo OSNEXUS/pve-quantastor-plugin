@@ -60104,12 +60104,6 @@ const apiSchema = [
                            "type" : "string",
                            "typetext" : "<string>"
                         },
-                        "qs_use_ssl" : {
-                           "description" : "QuantaStor API access via SSL",
-                           "optional" : 1,
-                           "type" : "boolean",
-                           "typetext" : "<boolean>"
-                        },
                         "qs_apiv4_host" : {
                            "description" : "QuantaStor API Host via IPv4",
                            "format" : "address",
@@ -60664,12 +60658,6 @@ const apiSchema = [
                      "optional" : 1,
                      "type" : "string",
                      "typetext" : "<string>"
-                  },
-                  "qs_use_ssl" : {
-                     "description" : "QuantaStor API access via SSL",
-                     "optional" : 1,
-                     "type" : "boolean",
-                     "typetext" : "<boolean>"
                   },
                   "qs_apiv4_host" : {
                      "description" : "QuantaStor API Host via IPv4",

@@ -259,7 +259,18 @@ print_hashes() {
     done
 }
 
+doRollback() {
+    # rollback files from backup
+    rollback_files FILE_NAMES_PERL5[@] "$TARGET_DIR_PERL5" ".pm"
+    rollback_files FILE_NAMES_JS[@] "$TARGET_DIR_JS" ".js"
+    rollback_files FILE_NAME_APIDOC[@] "$TARGET_DIR_APIDOC" ".js"
+}
+
 doPatchInstall() {
+    # if we are patching, we want to start with the original source files.
+    if [[ -d "$BACKUP_DIR" ]]; then
+        doRollback
+    fi
     # install the copy of QSTOR plugin only
     copy_files FILE_QSTOR_PLUGIN[@] "$SOURCE_DIR_PERL5" "$TARGET_DIR_PERL5" ".pm"
 
@@ -315,9 +326,7 @@ fi
 # Handle rollback before any other operation
 if [[ $DO_ROLLBACK -eq 1 ]]; then
     echo "Rolling back files from $BACKUP_DIR..."
-    rollback_files FILE_NAMES_PERL5[@] "$TARGET_DIR_PERL5" ".pm"
-    rollback_files FILE_NAMES_JS[@] "$TARGET_DIR_JS" ".js"
-    rollback_files FILE_NAME_APIDOC[@] "$TARGET_DIR_APIDOC" ".js"
+    doRollback
     echo "Rollback complete."
     exit 0
 elif [[ $DO_REVERSE_PATCH -eq 1 ]]; then

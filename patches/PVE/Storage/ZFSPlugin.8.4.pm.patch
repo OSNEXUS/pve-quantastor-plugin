@@ -1,5 +1,5 @@
---- ZFSPlugin.8.4.0.pm	2025-12-22 22:02:16.088259868 +0000
-+++ ZFSPlugin.8.4.0_new.pm	2025-12-22 22:02:16.088259868 +0000
+--- ZFSPlugin.8.4.0.pm	2025-11-21 23:21:50.455050022 +0000
++++ ZFSPlugin.8.4.0_new.pm	2026-01-07 23:58:29.772366950 +0000
 @@ -11,6 +11,7 @@
  use base qw(PVE::Storage::ZFSPoolPlugin);
  use PVE::Storage::LunCmd::Comstar;
@@ -26,7 +26,16 @@
      } else {
          $zfs_unknown_scsi_provider->($scfg->{iscsiprovider});
      }
-@@ -68,11 +71,19 @@
+@@ -53,7 +56,7 @@
+ 
+ sub zfs_request {
+     my ($class, $scfg, $timeout, $method, @params) = @_;
+-
++    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin - zfs_request called with method '$method' and params '@params'");
+     $timeout = PVE::RPCEnvironment->is_worker() ? 60*60 : 10
+ 	if !$timeout;
+ 
+@@ -68,11 +71,20 @@
              $msg = PVE::Storage::LunCmd::Iet::run_lun_command($scfg, $timeout, $method, @params);
          } elsif ($scfg->{iscsiprovider} eq 'LIO') {
              $msg = PVE::Storage::LunCmd::LIO::run_lun_command($scfg, $timeout, $method, @params);
@@ -39,6 +48,7 @@
  
 +        if ($scfg->{iscsiprovider} eq 'quantastor') {
 +            if ($method eq 'get') {
++                PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin - zfs_request - calling qs_zfs_get_command for method 'get'");
 +                return PVE::Storage::LunCmd::QuantaStorPlugin::qs_zfs_get_command($scfg, $timeout, $method, @params);
 +            }
 +        }
@@ -46,7 +56,7 @@
  	my $target = 'root@' . $scfg->{portal};
  
  	my $cmd = [@ssh_cmd, '-i', "$id_rsa_path/$scfg->{portal}_id_rsa", $target];
-@@ -92,7 +103,6 @@
+@@ -92,7 +104,6 @@
  
          run_command($cmd, outfunc => $output, timeout => $timeout);
      }
@@ -54,7 +64,7 @@
      return $msg;
  }
  
-@@ -130,6 +140,15 @@
+@@ -130,6 +141,15 @@
      $class->zfs_request($scfg, undef, 'delete_lu', $guid);
  }
  
@@ -70,7 +80,7 @@
  sub zfs_create_lu {
      my ($class, $scfg, $zvol) = @_;
  
-@@ -204,6 +223,22 @@
+@@ -204,6 +224,18 @@
  	    description => "target portal group for Linux LIO targets",
  	    type => 'string',
  	},
@@ -82,10 +92,6 @@
 +	    description => "QuantaStor API password",
 +	    type => 'string',
 +	},
-+    qs_use_ssl => {
-+	    description => "QuantaStor API access via SSL",
-+	    type => 'string',
-+	},
 +    qs_apiv4_host => {
 +	    description => "QuantaStor API host IPv4 address",
 +	    type => 'string',
@@ -93,7 +99,7 @@
      };
  }
  
-@@ -212,8 +247,8 @@
+@@ -212,8 +244,8 @@
  	nodes => { optional => 1 },
  	disable => { optional => 1 },
  	portal => { fixed => 1 },
@@ -104,18 +110,17 @@
  	blocksize => { fixed => 1 },
  	iscsiprovider => { fixed => 1 },
  	nowritecache => { optional => 1 },
-@@ -221,6 +256,10 @@
+@@ -221,6 +253,9 @@
  	comstar_hg => { optional => 1 },
  	comstar_tg => { optional => 1 },
  	lio_tpg => { optional => 1 },
 +    qs_user => { optional => 1 },
 +    qs_password => { optional => 1 },
-+    qs_use_ssl => { optional => 1 },
 +    qs_apiv4_host => { optional => 1 },
  	content => { optional => 1 },
  	bwlimit => { optional => 1 },
      };
-@@ -234,6 +273,10 @@
+@@ -234,6 +269,10 @@
      die "direct access to snapshots not implemented"
  	if defined($snapname);
  
@@ -126,7 +131,7 @@
      my ($vtype, $name, $vmid) = $class->parse_volname($volname);
  
      my $target = $scfg->{target};
-@@ -255,6 +298,10 @@
+@@ -255,6 +294,10 @@
      my ($vtype, $name, $vmid, $basename, $basevmid, $isBase) =
          $class->parse_volname($volname);
  
@@ -137,7 +142,7 @@
      die "create_base not possible with base image\n" if $isBase;
  
      my $newname = $name;
-@@ -278,6 +325,10 @@
+@@ -278,6 +321,10 @@
  sub clone_image {
      my ($class, $scfg, $storeid, $volname, $vmid, $snap) = @_;
  
@@ -148,7 +153,7 @@
      my $name = $class->SUPER::clone_image($scfg, $storeid, $volname, $vmid, $snap);
  
      # get ZFS dataset name from PVE volname
-@@ -340,6 +391,10 @@
+@@ -340,6 +387,10 @@
  
  sub volume_snapshot_delete {
      my ($class, $scfg, $storeid, $volname, $snap, $running) = @_;
@@ -159,7 +164,7 @@
  
      $volname = ($class->parse_volname($volname))[1];
  
-@@ -348,6 +403,10 @@
+@@ -348,6 +399,10 @@
  
  sub volume_snapshot_rollback {
      my ($class, $scfg, $storeid, $volname, $snap) = @_;
@@ -170,7 +175,7 @@
  
      $volname = ($class->parse_volname($volname))[1];
  
-@@ -394,6 +453,9 @@
+@@ -394,6 +449,9 @@
  
  sub activate_storage {
      my ($class, $storeid, $scfg, $cache) = @_;
@@ -180,7 +185,7 @@
  
      return 1;
  }
-@@ -420,4 +482,57 @@
+@@ -420,4 +478,57 @@
      return 1;
  }
  

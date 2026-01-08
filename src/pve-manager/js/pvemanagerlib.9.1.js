@@ -67000,11 +67000,9 @@ Ext.define('PVE.storage.ZFSInputPanel', {
             vm.set('isQuantaStor', newVal === 'quantastor');
             vm.set('hasWriteCacheOption', newVal === 'comstar' || newVal === 'istgt');
             if (newVal !== 'quantastor') {
-		    	me.lookupReference('qs_use_ssl_field').setValue(true);
 		    	me.lookupReference('qs_apiv4_host_field').setValue('');
 		    	me.lookupReference('qs_user_field').setValue('');
 		    	me.lookupReference('qs_password_field').setValue('');
-		    	me.lookupReference('qs_confirmpw_field').setValue('');
 		    }
         },
     },
@@ -67023,7 +67021,6 @@ Ext.define('PVE.storage.ZFSInputPanel', {
     },
 
     setValues: function (values) {
-        values.qs_confirmpw = values.qs_password;
         values.writecache = values.nowritecache ? 0 : 1;
         this.callParent([values]);
     },
@@ -67068,16 +67065,6 @@ Ext.define('PVE.storage.ZFSInputPanel', {
                 bind: { hidden: '{!isComstar}' },
                 allowBlank: true,
             },
-            {
-		        xtype: 'proxmoxcheckbox',
-		        name: 'qs_use_ssl',
-		        reference: 'qs_use_ssl_field',
-		        inputId: 'qs_use_ssl_field',
-		        checked: true,
-		        bind: { hidden: '{!isQuantaStor}' },
-		        uncheckedValue: 0,
-		        fieldLabel: gettext('API use SSL')
-	        },
 	        {
 		        xtype: 'textfield',
 		        name: 'qs_user',
@@ -67085,7 +67072,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 		        inputId: 'qs_user_field',
 		        value: '',
 		        allowBlank: false,
-		        fieldLabel: gettext('API Username'),
+		        fieldLabel: gettext('QS Username'),
 		        bind: { hidden: '{!isQuantaStor}' },
 		    }
         ];
@@ -67101,7 +67088,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
             {
                 xtype: 'proxmoxcheckbox',
                 name: 'sparse',
-                checked: false,
+                checked: true,
                 uncheckedValue: 0,
                 fieldLabel: gettext('Thin provision'),
             },
@@ -67140,7 +67127,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 		        allowBlank: true,
 		        emptyText: Proxmox.Utils.noneText,
 		        bind: { hidden: '{!isQuantaStor}' },
-		        fieldLabel: gettext('API IPv4 Host'),
+		        fieldLabel: gettext('QS Host'),
 		        allowBlank: true
 	        },
 	        {
@@ -67154,33 +67141,7 @@ Ext.define('PVE.storage.ZFSInputPanel', {
 		        allowBlank: false,
 		        emptyText: Proxmox.Utils.noneText,
 		        bind: { hidden: '{!isQuantaStor}' },
-		        fieldLabel: gettext('API Password'),
-		        change: function(f, value) {
-		            if (f.rendered) {
-		        	f.up().down('field[name=qs_confirmpw]').validate();
-		            }
-		        }
-	        },
-	        {
-		        xtype: 'proxmoxtextfield',
-		        name: 'qs_confirmpw',
-		        reference: 'qs_confirmpw_field',
-		        inputType: me.isCreate ? '' : 'password',
-		        value: '',
-		        editable: true,
-		        deleteEmpty: true,
-		        allowBlank: false,
-		        submitValue: false,
-		        emptyText: Proxmox.Utils.noneText,
-		        bind: { hidden: '{!isQuantaStor}' },
-		        fieldLabel: gettext('Confirm Password'),
-		        validator: function(value) {
-		            var pw = this.up().down('field[name=qs_password]').getValue();
-		            if (pw !== value) {
-		        	return "Passwords do not match!";
-		            }
-		            return true;
-		        }
+		        fieldLabel: gettext('QS Password')
 	        },
         ];
 

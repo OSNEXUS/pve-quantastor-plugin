@@ -56,7 +56,7 @@ my $zfs_get_base = sub {
 
 sub zfs_request {
     my ($class, $scfg, $timeout, $method, @params) = @_;
-
+    PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin - zfs_request called with method '$method' and params '@params'");
     $timeout = PVE::RPCEnvironment->is_worker() ? 60*60 : 10
 	if !$timeout;
 
@@ -80,6 +80,7 @@ sub zfs_request {
 
         if ($scfg->{iscsiprovider} eq 'quantastor') {
             if ($method eq 'get') {
+                PVE::Storage::LunCmd::QuantaStorPlugin::qs_write_to_log("ZFSPlugin - zfs_request - calling qs_zfs_get_command for method 'get'");
                 return PVE::Storage::LunCmd::QuantaStorPlugin::qs_zfs_get_command($scfg, $timeout, $method, @params);
             }
         }
@@ -231,10 +232,6 @@ sub properties {
 	    description => "QuantaStor API password",
 	    type => 'string',
 	},
-    qs_use_ssl => {
-	    description => "QuantaStor API access via SSL",
-	    type => 'string',
-	},
     qs_apiv4_host => {
 	    description => "QuantaStor API host IPv4 address",
 	    type => 'string',
@@ -258,7 +255,6 @@ sub options {
 	lio_tpg => { optional => 1 },
     qs_user => { optional => 1 },
     qs_password => { optional => 1 },
-    qs_use_ssl => { optional => 1 },
     qs_apiv4_host => { optional => 1 },
 	content => { optional => 1 },
 	bwlimit => { optional => 1 },

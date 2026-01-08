@@ -1,5 +1,5 @@
---- pvemanagerlib.9.1.1.js	2025-11-21 21:12:06.181467051 +0000
-+++ pvemanagerlib.9.1.1_new.js	2025-11-21 21:12:06.189467065 +0000
+--- pvemanagerlib.9.1.1.js	2026-01-08 00:37:48.524075551 +0000
++++ pvemanagerlib.9.1.1_new.js	2026-01-08 00:47:16.220978277 +0000
 @@ -9840,6 +9840,7 @@
      alias: ['widget.pveiScsiProviderSelector'],
      comboItems: [
@@ -16,39 +16,21 @@
              hasWriteCacheOption: true,
          },
      },
-@@ -66995,7 +66997,15 @@
+@@ -66995,7 +66997,13 @@
              var vm = this.getViewModel();
              vm.set('isLIO', newVal === 'LIO');
              vm.set('isComstar', newVal === 'comstar');
 +            vm.set('isQuantaStor', newVal === 'quantastor');
              vm.set('hasWriteCacheOption', newVal === 'comstar' || newVal === 'istgt');
 +            if (newVal !== 'quantastor') {
-+		    	me.lookupReference('qs_use_ssl_field').setValue(true);
 +		    	me.lookupReference('qs_apiv4_host_field').setValue('');
 +		    	me.lookupReference('qs_user_field').setValue('');
 +		    	me.lookupReference('qs_password_field').setValue('');
-+		    	me.lookupReference('qs_confirmpw_field').setValue('');
 +		    }
          },
      },
  
-@@ -67005,7 +67015,6 @@
-         if (me.isCreate) {
-             values.content = 'images';
-         }
--
-         values.nowritecache = values.writecache ? 0 : 1;
-         delete values.writecache;
- 
-@@ -67013,6 +67022,7 @@
-     },
- 
-     setValues: function (values) {
-+        values.qs_confirmpw = values.qs_password;
-         values.writecache = values.nowritecache ? 0 : 1;
-         this.callParent([values]);
-     },
-@@ -67029,7 +67039,7 @@
+@@ -67029,7 +67037,7 @@
                  allowBlank: false,
              },
              {
@@ -57,7 +39,7 @@
                  name: 'pool',
                  value: '',
                  fieldLabel: gettext('Pool'),
-@@ -67043,7 +67053,7 @@
+@@ -67043,7 +67051,7 @@
                  allowBlank: false,
              },
              {
@@ -66,7 +48,7 @@
                  name: 'target',
                  value: '',
                  fieldLabel: gettext('Target'),
-@@ -67054,9 +67064,29 @@
+@@ -67054,9 +67062,19 @@
                  name: 'comstar_tg',
                  value: '',
                  fieldLabel: gettext('Target group'),
@@ -74,16 +56,6 @@
 +                bind: { hidden: '{!isComstar}' },
                  allowBlank: true,
              },
-+            {
-+		        xtype: 'proxmoxcheckbox',
-+		        name: 'qs_use_ssl',
-+		        reference: 'qs_use_ssl_field',
-+		        inputId: 'qs_use_ssl_field',
-+		        checked: true,
-+		        bind: { hidden: '{!isQuantaStor}' },
-+		        uncheckedValue: 0,
-+		        fieldLabel: gettext('API use SSL')
-+	        },
 +	        {
 +		        xtype: 'textfield',
 +		        name: 'qs_user',
@@ -91,13 +63,22 @@
 +		        inputId: 'qs_user_field',
 +		        value: '',
 +		        allowBlank: false,
-+		        fieldLabel: gettext('API Username'),
++		        fieldLabel: gettext('QS Username'),
 +		        bind: { hidden: '{!isQuantaStor}' },
 +		    }
          ];
  
          me.column2 = [
-@@ -67100,6 +67130,57 @@
+@@ -67070,7 +67088,7 @@
+             {
+                 xtype: 'proxmoxcheckbox',
+                 name: 'sparse',
+-                checked: false,
++                checked: true,
+                 uncheckedValue: 0,
+                 fieldLabel: gettext('Thin provision'),
+             },
+@@ -67100,6 +67118,31 @@
                  allowBlank: false,
                  fieldLabel: gettext('Target portal group'),
              },
@@ -110,7 +91,7 @@
 +		        allowBlank: true,
 +		        emptyText: Proxmox.Utils.noneText,
 +		        bind: { hidden: '{!isQuantaStor}' },
-+		        fieldLabel: gettext('API IPv4 Host'),
++		        fieldLabel: gettext('QS Host'),
 +		        allowBlank: true
 +	        },
 +	        {
@@ -124,33 +105,7 @@
 +		        allowBlank: false,
 +		        emptyText: Proxmox.Utils.noneText,
 +		        bind: { hidden: '{!isQuantaStor}' },
-+		        fieldLabel: gettext('API Password'),
-+		        change: function(f, value) {
-+		            if (f.rendered) {
-+		        	f.up().down('field[name=qs_confirmpw]').validate();
-+		            }
-+		        }
-+	        },
-+	        {
-+		        xtype: 'proxmoxtextfield',
-+		        name: 'qs_confirmpw',
-+		        reference: 'qs_confirmpw_field',
-+		        inputType: me.isCreate ? '' : 'password',
-+		        value: '',
-+		        editable: true,
-+		        deleteEmpty: true,
-+		        allowBlank: false,
-+		        submitValue: false,
-+		        emptyText: Proxmox.Utils.noneText,
-+		        bind: { hidden: '{!isQuantaStor}' },
-+		        fieldLabel: gettext('Confirm Password'),
-+		        validator: function(value) {
-+		            var pw = this.up().down('field[name=qs_password]').getValue();
-+		            if (pw !== value) {
-+		        	return "Passwords do not match!";
-+		            }
-+		            return true;
-+		        }
++		        fieldLabel: gettext('QS Password')
 +	        },
          ];
  
