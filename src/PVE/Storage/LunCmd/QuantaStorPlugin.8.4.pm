@@ -16,8 +16,8 @@ use JSON;
 use PVE::Storage::Plugin;
 our $MAX_VOLUMES_PER_GUEST = 1024;
 # Set to 1 to enable debug logging
-our $QS_DEBUG = 0;
-our $QS_VERBOSE = 0;
+our $QS_DEBUG = 1;
+our $QS_VERBOSE = 1;
 
 our $QS_CA_BUNDLE = "/etc/ssl/certs/qs-ca-certificates.crt";
 
@@ -104,6 +104,21 @@ sub qs_get_vol_obj_by_name {
                                             300,
                                             $searchParams);
     return qs_get_object_from_search_response($res_vol_search);
+}
+
+sub qs_get_vol_target_list {
+    my ($scfg) = @_;
+    #trim qs- from pool name
+    my $storeid = $scfg->{pool};
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_get_vol_target_list -storeid: $storeid");
+    $storeid =~ s/^qs-//;
+    my $searchParams = "=storagePoolId:$storeid";
+    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_user},
+                                            $scfg->{qs_password},
+                                            300,
+                                            $searchParams);
+    return qs_get_object_list_from_search_response($res_vol_search);
 }
 
 sub qs_api_call {
@@ -262,7 +277,7 @@ sub qs_storage_volume_search {
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $timeout);
     check_rest_error($response, 'qs_storage_volume_search');
-    #qs_log_pretty_response($response, 'qs_storage_volume_search');
+    qs_log_pretty_response($response, 'qs_storage_volume_search');
 
     return $response;
 }
@@ -280,6 +295,16 @@ sub qs_get_object_from_search_response {
                 qs_write_to_log("LunCmd/QuantaStor.pm - qs_get_object_from_search_response - object id not defined in search response");
             }
         }
+    }
+
+    return undef;
+}
+
+sub qs_get_object_list_from_search_response {
+    my ($response) = @_;
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_get_object_list_from_search_response");
+    if (defined($response->{list})) {
+        return $response->{list};
     }
 
     return undef;
@@ -803,6 +828,28 @@ sub qs_iscsi_target_logout {
     }
 }
 
+sub qs_iscsi_target_is_logged_in {
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_target_is_logged_in");
+    my ($scfg, $target_iqn) = @_;
+
+    my $cmd = "iscsiadm -m session";
+
+    qs_write_to_log("Running command: $cmd");
+
+    my $output = `$cmd 2>&1`;
+    my $rc = $? >> 8;
+
+    qs_write_to_log("Command output:\n$output");
+    qs_write_to_log("Command exit code: $rc");
+
+    if ($rc == 0 && $output =~ /\Q$target_iqn\E/) {
+        qs_write_to_log("Target $target_iqn is logged in");
+        return 1;
+    } else {
+        qs_write_to_log("Target $target_iqn is not logged in");
+        return 0;
+    }
+}
 
 sub qs_zfs_create_zvol {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_create_zvol");
@@ -979,6 +1026,28 @@ sub activate_storage {
 
     if ($@) {
         die "Fatal error while processing QuantaStor host lookup/add: $@\n";
+    }
+
+    # log into iscsi targets if needed
+    eval {
+        # get list of volumes associated with $storeid
+        my $vol_json_list = qs_get_vol_target_list($scfg);
+        # check to see if we are logged in to each target, if not login
+        foreach my $vol (@$vol_json_list) {
+            #skip disks that start with template-base- as these are not actual volumes
+            next if $vol->{name} =~ m/^template-base-/;
+            qs_iscsi_target_is_logged_in($scfg, $vol->{iqn}) or do {
+                qs_iscsi_target_login($scfg, $vol->{iqn});
+                my $available = wait_for_volume_available($scfg, $vol->{obj}, 300);
+                if (!$available) {
+                    die "ACTIVATE STORAGE: Timeout waiting for volume to become available after iSCSI login (IQN: $vol->{iqn})";
+                }
+            };
+        }
+    };
+
+    if ($@) {
+        die "Fatal error while processing QuantaStor target activation: $@\n";
     }
 
     return 1;
