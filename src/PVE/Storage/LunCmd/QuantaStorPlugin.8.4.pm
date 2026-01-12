@@ -16,8 +16,8 @@ use JSON;
 use PVE::Storage::Plugin;
 our $MAX_VOLUMES_PER_GUEST = 1024;
 # Set to 1 to enable debug logging
-our $QS_DEBUG = 1;
-our $QS_VERBOSE = 1;
+our $QS_DEBUG = 0;
+our $QS_VERBOSE = 0;
 
 our $QS_CA_BUNDLE = "/etc/ssl/certs/qs-ca-certificates.crt";
 
@@ -277,7 +277,7 @@ sub qs_storage_volume_search {
 
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $timeout);
     check_rest_error($response, 'qs_storage_volume_search');
-    qs_log_pretty_response($response, 'qs_storage_volume_search');
+    #qs_log_pretty_response($response, 'qs_storage_volume_search');
 
     return $response;
 }
@@ -982,7 +982,7 @@ sub activate_storage {
         if (exists $res_host_get->{RestError}) {
             # Host not found
             if ($res_host_get->{RestError} =~ /Failed to locate host/i) {
-                print "Host not found, creating new host entry...\n";
+                qs_write_to_log("Host not found, creating new host entry...\n");
 
                 my $res_host_add = qs_host_add(
                     $scfg->{qs_apiv4_host},
@@ -1005,7 +1005,7 @@ sub activate_storage {
                     }
 
                     $hostId = $res_host_add->{obj}->{id};
-                    print "QuantaStor host created. ID: $hostId\n";
+                    qs_write_to_log("QuantaStor host created. ID: $hostId\n");
                 } or do {
                     my $err = $@ || 'Unknown error';
                     die "Fatal error while processing host add: $err\n";
@@ -1037,8 +1037,40 @@ sub activate_storage {
             #skip disks that start with template-base- as these are not actual volumes
             next if $vol->{name} =~ m/^template-base-/;
             qs_iscsi_target_is_logged_in($scfg, $vol->{iqn}) or do {
-                qs_iscsi_target_login($scfg, $vol->{iqn});
-                my $available = wait_for_volume_available($scfg, $vol->{obj}, 300);
+                # check to make sure host acl exists for this volume
+                # Using the Host object we can check if the ACL for this volume exists
+                my $acl_exists = 0;
+                if (defined $res_host_get->{hostVolumeAclList} && ref($res_host_get->{hostVolumeAclList}) eq 'ARRAY') {
+                    foreach my $acl (@{$res_host_get->{hostVolumeAclList}}) {
+                        if (defined $acl->{storageVolumeId} && $acl->{storageVolumeId} eq $vol->{id}) {
+                            $acl_exists = 1;
+                            last;
+                        }
+                    }
+                }
+
+                # if the acl does not exist, create it
+                if (!$acl_exists) {
+                    qs_write_to_log("Creating ACL for host '$iqn' on volume '$vol->{name}'...\n");
+                    my $res_host_acl_add = qs_storage_volume_acl_add(
+                        $scfg->{qs_apiv4_host},
+                        $scfg->{qs_user},
+                        $scfg->{qs_password},
+                        300,
+                        $vol->{id},
+                        $iqn
+                    );
+                    if (!defined $res_host_acl_add || ref($res_host_acl_add) ne 'HASH') {
+                        die "qs_storage_volume_acl_add returned invalid data type: $res_host_acl_add\n";
+                    }
+                }
+
+                # attempt iscsi login
+                qs_write_to_log("Logging in to iSCSI target '$vol->{iqn}'...\n");
+                if (!qs_iscsi_target_login($scfg, $vol->{iqn})) {
+                    die "ACTIVATE STORAGE: iSCSI login failed for target IQN: $vol->{iqn}";
+                }
+                my $available = wait_for_volume_available($scfg, $vol, 300);
                 if (!$available) {
                     die "ACTIVATE STORAGE: Timeout waiting for volume to become available after iSCSI login (IQN: $vol->{iqn})";
                 }
