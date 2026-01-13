@@ -399,6 +399,28 @@ sub qs_storage_volume_modify {
     return $response;
 }
 
+sub qs_storage_volume_resize {
+    my ($server_ip, $username, $password, $timeout, $storageVolume, $newSizeInBytes) = @_;
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_resize $newSizeInBytes bytes. StorageVolume: $storageVolume");
+
+    # verify size is in bytes
+    if ($newSizeInBytes !~ /^\d+$/) {
+        die "Error: newSizeInBytes must be a numeric value in bytes.";
+    }
+    my $api_name = 'storageVolumeResize';
+    my $query_params = {
+        storageVolume => $storageVolume,
+        newSizeInBytes => $newSizeInBytes,
+        flags => 2 # Force resize
+    };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $timeout);
+    check_rest_error($response, 'qs_storage_volume_resize');
+    #qs_log_pretty_response($response, 'qs_storage_volume_resize');
+
+    return $response;
+}
+
 sub qs_storage_volume_snapshot {
     my ($server_ip, $username, $password, $timeout, $storageVolume, $snapshotName) = @_;
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_snapshot $storageVolume snapshot name: $snapshotName");
@@ -1434,6 +1456,26 @@ sub qs_volume_snapshot {
                                             300,
                                             $vname,
                                             $snap_name);
+}
+
+# returns new size
+sub qs_volume_resize {
+    my ($scfg, $storeid, $volname, $size, $running) = @_;
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_volume_resize - called with (volname: '$volname', size: '$size')");
+
+    #make sure size is in bytes, if not convert to bytes
+
+    my $res_volume_resize = qs_storage_volume_resize($scfg->{qs_apiv4_host},
+                                                     $scfg->{qs_user},
+                                                     $scfg->{qs_password},
+                                                     300,
+                                                     $volname,
+                                                     $size); # force option
+
+    if (!defined($res_volume_resize) || !defined($res_volume_resize->{obj}) || !defined($res_volume_resize->{obj}->{size})) {
+        die "Volume resize failed or returned invalid response. : " . Dumper($res_volume_resize);
+    }
+    return $res_volume_resize->{obj}->{size};
 }
 
 sub qs_volume_snapshot_delete {
