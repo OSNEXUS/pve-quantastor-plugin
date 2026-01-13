@@ -106,6 +106,21 @@ sub qs_get_vol_obj_by_name {
     return qs_get_object_from_search_response($res_vol_search);
 }
 
+sub qs_get_vol_target_list {
+    my ($scfg) = @_;
+    #trim qs- from pool name
+    my $storeid = $scfg->{pool};
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_get_vol_target_list -storeid: $storeid");
+    $storeid =~ s/^qs-//;
+    my $searchParams = "=storagePoolId:$storeid";
+    my $res_vol_search = qs_storage_volume_search($scfg->{qs_apiv4_host},
+                                            $scfg->{qs_user},
+                                            $scfg->{qs_password},
+                                            300,
+                                            $searchParams);
+    return qs_get_object_list_from_search_response($res_vol_search);
+}
+
 sub qs_api_call {
     #qs_write_to_log("LunCmd/QuantaStor.pm - qs_api_call");
     my ($server_ip, $username, $password, $api_name, $query_params, $timeout) = @_;
@@ -285,6 +300,16 @@ sub qs_get_object_from_search_response {
     return undef;
 }
 
+sub qs_get_object_list_from_search_response {
+    my ($response) = @_;
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_get_object_list_from_search_response");
+    if (defined($response->{list})) {
+        return $response->{list};
+    }
+
+    return undef;
+}
+
 sub qs_storage_volume_enum {
     my ($server_ip, $username, $password, $timeout, $storageVolumeList) = @_;
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_enum, storageVolumeList: $storageVolumeList");
@@ -362,6 +387,28 @@ sub qs_storage_volume_modify {
     my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $timeout);
     check_rest_error($response, 'qs_storage_volume_modify');
     #qs_log_pretty_response($response, 'qs_storage_volume_modify');
+
+    return $response;
+}
+
+sub qs_storage_volume_resize {
+    my ($server_ip, $username, $password, $timeout, $storageVolume, $newSizeInBytes) = @_;
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_storage_volume_resize $newSizeInBytes bytes. StorageVolume: $storageVolume");
+
+    # verify size is in bytes
+    if ($newSizeInBytes !~ /^\d+$/) {
+        die "Error: newSizeInBytes must be a numeric value in bytes.";
+    }
+    my $api_name = 'storageVolumeResize';
+    my $query_params = {
+        storageVolume => $storageVolume,
+        newSizeInBytes => $newSizeInBytes,
+        flags => 2 # Force resize
+    };
+
+    my $response = qs_api_call($server_ip, $username, $password, $api_name, $query_params, $timeout);
+    check_rest_error($response, 'qs_storage_volume_resize');
+    #qs_log_pretty_response($response, 'qs_storage_volume_resize');
 
     return $response;
 }
@@ -803,6 +850,28 @@ sub qs_iscsi_target_logout {
     }
 }
 
+sub qs_iscsi_target_is_logged_in {
+    qs_write_to_log("LunCmd/QuantaStor.pm - qs_iscsi_target_is_logged_in");
+    my ($scfg, $target_iqn) = @_;
+
+    my $cmd = "iscsiadm -m session";
+
+    qs_write_to_log("Running command: $cmd");
+
+    my $output = `$cmd 2>&1`;
+    my $rc = $? >> 8;
+
+    qs_write_to_log("Command output:\n$output");
+    qs_write_to_log("Command exit code: $rc");
+
+    if ($rc == 0 && $output =~ /\Q$target_iqn\E/) {
+        qs_write_to_log("Target $target_iqn is logged in");
+        return 1;
+    } else {
+        qs_write_to_log("Target $target_iqn is not logged in");
+        return 0;
+    }
+}
 
 sub qs_zfs_create_zvol {
     qs_write_to_log("LunCmd/QuantaStor.pm - qs_create_zvol");
@@ -935,7 +1004,7 @@ sub activate_storage {
         if (exists $res_host_get->{RestError}) {
             # Host not found
             if ($res_host_get->{RestError} =~ /Failed to locate host/i) {
-                print "Host not found, creating new host entry...\n";
+                qs_write_to_log("Host not found, creating new host entry...\n");
 
                 my $res_host_add = qs_host_add(
                     $scfg->{qs_apiv4_host},
@@ -958,7 +1027,7 @@ sub activate_storage {
                     }
 
                     $hostId = $res_host_add->{obj}->{id};
-                    print "QuantaStor host created. ID: $hostId\n";
+                    qs_write_to_log("QuantaStor host created. ID: $hostId\n");
                 } or do {
                     my $err = $@ || 'Unknown error';
                     die "Fatal error while processing host add: $err\n";
@@ -979,6 +1048,60 @@ sub activate_storage {
 
     if ($@) {
         die "Fatal error while processing QuantaStor host lookup/add: $@\n";
+    }
+
+    # log into iscsi targets if needed
+    eval {
+        # get list of volumes associated with $storeid
+        my $vol_json_list = qs_get_vol_target_list($scfg);
+        # check to see if we are logged in to each target, if not login
+        foreach my $vol (@$vol_json_list) {
+            #skip disks that start with template-base- as these are not actual volumes
+            next if $vol->{name} =~ m/^template-base-/;
+            qs_iscsi_target_is_logged_in($scfg, $vol->{iqn}) or do {
+                # check to make sure host acl exists for this volume
+                # Using the Host object we can check if the ACL for this volume exists
+                my $acl_exists = 0;
+                if (defined $res_host_get->{hostVolumeAclList} && ref($res_host_get->{hostVolumeAclList}) eq 'ARRAY') {
+                    foreach my $acl (@{$res_host_get->{hostVolumeAclList}}) {
+                        if (defined $acl->{storageVolumeId} && $acl->{storageVolumeId} eq $vol->{id}) {
+                            $acl_exists = 1;
+                            last;
+                        }
+                    }
+                }
+
+                # if the acl does not exist, create it
+                if (!$acl_exists) {
+                    qs_write_to_log("Creating ACL for host '$iqn' on volume '$vol->{name}'...\n");
+                    my $res_host_acl_add = qs_storage_volume_acl_add(
+                        $scfg->{qs_apiv4_host},
+                        $scfg->{qs_user},
+                        $scfg->{qs_password},
+                        300,
+                        $vol->{id},
+                        $iqn
+                    );
+                    if (!defined $res_host_acl_add || ref($res_host_acl_add) ne 'HASH') {
+                        die "qs_storage_volume_acl_add returned invalid data type: $res_host_acl_add\n";
+                    }
+                }
+
+                # attempt iscsi login
+                qs_write_to_log("Logging in to iSCSI target '$vol->{iqn}'...\n");
+                if (!qs_iscsi_target_login($scfg, $vol->{iqn})) {
+                    die "ACTIVATE STORAGE: iSCSI login failed for target IQN: $vol->{iqn}";
+                }
+                my $available = wait_for_volume_available($scfg, $vol, 300);
+                if (!$available) {
+                    die "ACTIVATE STORAGE: Timeout waiting for volume to become available after iSCSI login (IQN: $vol->{iqn})";
+                }
+            };
+        }
+    };
+
+    if ($@) {
+        die "Fatal error while processing QuantaStor target activation: $@\n";
     }
 
     return 1;
@@ -1320,6 +1443,26 @@ sub qs_volume_snapshot {
                                             300,
                                             $vname,
                                             $snap_name);
+}
+
+# returns new size
+sub qs_volume_resize {
+    my ($scfg, $storeid, $volname, $size, $running) = @_;
+    qs_write_to_log("LunCmd/QuantaStorPlugin.pm - qs_volume_resize - called with (volname: '$volname', size: '$size')");
+
+    #make sure size is in bytes, if not convert to bytes
+
+    my $res_volume_resize = qs_storage_volume_resize($scfg->{qs_apiv4_host},
+                                                     $scfg->{qs_user},
+                                                     $scfg->{qs_password},
+                                                     300,
+                                                     $volname,
+                                                     $size); # force option
+
+    if (!defined($res_volume_resize) || !defined($res_volume_resize->{obj}) || !defined($res_volume_resize->{obj}->{size})) {
+        die "Volume resize failed or returned invalid response. : " . Dumper($res_volume_resize);
+    }
+    return $res_volume_resize->{obj}->{size};
 }
 
 sub qs_volume_snapshot_delete {

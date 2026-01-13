@@ -1,5 +1,5 @@
 --- ZFSPlugin.8.4.0.pm	2025-11-21 23:21:50.455050022 +0000
-+++ ZFSPlugin.8.4.0_new.pm	2026-01-07 23:58:29.772366950 +0000
++++ ZFSPlugin.8.4.0_new.pm	2026-01-13 18:12:48.822195577 +0000
 @@ -11,6 +11,7 @@
  use base qw(PVE::Storage::ZFSPoolPlugin);
  use PVE::Storage::LunCmd::Comstar;
@@ -153,7 +153,18 @@
      my $name = $class->SUPER::clone_image($scfg, $storeid, $volname, $vmid, $snap);
  
      # get ZFS dataset name from PVE volname
-@@ -340,6 +387,10 @@
+@@ -328,6 +375,10 @@
+ 
+ sub volume_resize {
+     my ($class, $scfg, $storeid, $volname, $size, $running) = @_;
++    if ($scfg->{iscsiprovider} eq 'quantastor')
++    {
++        return PVE::Storage::LunCmd::QuantaStorPlugin::qs_volume_resize($scfg, $storeid, $volname, $size, $running);
++    }
+ 
+     $volname = ($class->parse_volname($volname))[1];
+ 
+@@ -340,6 +391,10 @@
  
  sub volume_snapshot_delete {
      my ($class, $scfg, $storeid, $volname, $snap, $running) = @_;
@@ -164,7 +175,7 @@
  
      $volname = ($class->parse_volname($volname))[1];
  
-@@ -348,6 +399,10 @@
+@@ -348,6 +403,10 @@
  
  sub volume_snapshot_rollback {
      my ($class, $scfg, $storeid, $volname, $snap) = @_;
@@ -175,7 +186,7 @@
  
      $volname = ($class->parse_volname($volname))[1];
  
-@@ -394,6 +449,9 @@
+@@ -394,6 +453,9 @@
  
  sub activate_storage {
      my ($class, $storeid, $scfg, $cache) = @_;
@@ -185,7 +196,7 @@
  
      return 1;
  }
-@@ -420,4 +478,57 @@
+@@ -420,4 +482,57 @@
      return 1;
  }
  

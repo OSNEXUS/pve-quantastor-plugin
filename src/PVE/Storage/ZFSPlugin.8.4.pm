@@ -375,6 +375,10 @@ sub free_image {
 
 sub volume_resize {
     my ($class, $scfg, $storeid, $volname, $size, $running) = @_;
+    if ($scfg->{iscsiprovider} eq 'quantastor')
+    {
+        return PVE::Storage::LunCmd::QuantaStorPlugin::qs_volume_resize($scfg, $storeid, $volname, $size, $running);
+    }
 
     $volname = ($class->parse_volname($volname))[1];
 
