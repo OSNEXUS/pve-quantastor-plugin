@@ -10,3 +10,6 @@ debian/.debhelper/
 
 # Legacy patch source directories (untracked reference files)
 patches/**/src/
+
+# Developer working notes (not part of the public release)
+DEVNOTES.md
