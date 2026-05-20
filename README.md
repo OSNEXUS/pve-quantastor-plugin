@@ -10,7 +10,6 @@ storage backend for virtual machines and containers.
 
 | Component | State |
 |---|---|
-| `LunCmd/QuantaStorPlugin.pm` (legacy) | Functional alpha — ships as PVE source patches |
 | `QuantaStor/APIClient.pm` | Complete — clean REST client, 44 unit tests |
 | `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 37 unit tests |
 | `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 46 unit tests |
@@ -66,7 +65,7 @@ PVE volume names follow the standard Proxmox convention:
 ## Repository Layout
 
 ```
-qs-pve-plugin/
+pve-quantastor-plugin/
 ├── src/
 │   └── perl5/PVE/Storage/
 │       ├── Custom/
@@ -84,12 +83,8 @@ qs-pve-plugin/
 │       ├── MockUA.pm                 Mock LWP::UserAgent for APIClient tests
 │       └── MockCmdRunner.pm          Mock command runner for ISCSIManager tests
 ├── debian/                           Debian packaging
-├── legacy/                           v0.1-alpha patch-based integration (archived)
-│   ├── src/                          Patched PVE source files (per version)
-│   ├── patches/                      .patch files for PVE core files
-│   ├── install-qs-pve.sh             Legacy patch installer script
-│   └── patching-docs.md              Legacy patching documentation
-├── pve-upstream/                     Upstream PVE source reference (git-ignored)
+├── www/
+│   └── quantastor-storage.js         PVE web UI panel (injected by postinst)
 ├── build-deb.sh                      Build the .deb package
 └── README.md
 ```
@@ -107,8 +102,9 @@ dpkg -i pve-storage-quantastor_0.2.0-1_all.deb
 # PVE services are restarted automatically by postinst
 ```
 
-The `quantastor` storage type will appear in the PVE UI immediately. The package survives
-`pve-storage` and `pve-manager` upgrades intact — no core files are modified.
+The `quantastor` storage type will appear in the PVE UI immediately after the browser
+is refreshed. The package includes a dpkg trigger that automatically re-injects the
+UI script tag if `pve-manager` is upgraded — no manual reinstall required.
 
 ### Manual install (no package)
 
@@ -121,22 +117,17 @@ mkdir -p /usr/share/perl5/PVE/Storage/Custom
 cp src/perl5/PVE/Storage/Custom/QuantaStor.pm  /usr/share/perl5/PVE/Storage/Custom/
 cp -r src/perl5/PVE/Storage/QuantaStor/        /usr/share/perl5/PVE/Storage/
 
+# Inject the web UI panel
+cp www/quantastor-storage.js /usr/share/pve-manager/js/
+sed -i '/pvemanagerlib\.js/a\    <script type="text/javascript" src="/pve2/js/quantastor-storage.js"></script>' \
+    /usr/share/pve-manager/index.html.tpl
+
 # Restart PVE services
-systemctl restart pvedaemon pveproxy pvestatd pve-cluster
+systemctl restart pvedaemon pveproxy pvestatd
 ```
 
-### Legacy (patch-based) method
-
-The v0.1-alpha release required patching PVE's own storage modules. Version-specific
-patch files are archived in `legacy/` for PVE 8.4.0 and 9.1.1.
-
-```bash
-bash legacy/install-qs-pve.sh --install
-systemctl restart pvedaemon pveproxy
-```
-
-> **Warning:** This overwrites core PVE files and is reverted by PVE package upgrades.
-> Use the package install method instead.
+> **Note:** Manual installs do not include the dpkg trigger. If `pve-manager` is
+> upgraded later, re-run the `sed` command above to restore the UI panel.
 
 ### Building the package from source
 
@@ -152,23 +143,7 @@ bash build-deb.sh
 
 ## Configuration
 
-### Legacy (zfs + quantastor provider)
-
-```
-# /etc/pve/storage.cfg
-zfs: my-quantastor
-    content images
-    iscsiprovider quantastor
-    portal 10.0.0.1
-    pool qs-<pool-uuid>
-    qs_apiv4_host 10.0.0.1
-    qs_username admin
-    qs_password <password>
-    blocksize 4k
-    sparse 1
-```
-
-### New (quantastor type) — Web UI
+### Web UI
 
 Go to **Datacenter → Storage → Add → QuantaStor**.
 
@@ -186,7 +161,7 @@ Go to **Datacenter → Storage → Add → QuantaStor**.
 
 `API Host`, `Username`, and `Pool` are fixed after creation. All other fields can be edited later.
 
-### New (quantastor type) — CLI
+### CLI
 
 Add storage via `pvesm` — the password is stored securely and never written to `storage.cfg`:
 
@@ -197,7 +172,7 @@ pvesm add quantastor my-quantastor \
   --password <password> \
   --pool_id <pool-name-or-uuid> \
   --content images \
-  --portal 10.0.0.1   \
+  --portal 10.0.0.1 \
   --ssl_verify 0
 ```
 
@@ -227,11 +202,11 @@ fields are optional and can be updated without removing the storage.
 ### Unit tests (no appliance required)
 
 ```bash
-cd qs-pve-plugin
+cd pve-quantastor-plugin
 ./t/run_tests.sh
 ```
 
-Requires: `perl`, `libjson-perl` (or `libjson-pp-perl`), `libwww-perl`, `liburi-perl`
+Requires: `perl`, `libwww-perl`, `liburi-perl` (`JSON::PP` and `File::Temp` are included in Perl core)
 
 ```bash
 # Install on Debian/Ubuntu/PVE host
@@ -296,7 +271,7 @@ my $client = PVE::Storage::QuantaStor::APIClient->new(
 | `volume_get($name_or_uuid)` | Single volume object; dies if not found |
 | `volume_get_or_undef($name_or_uuid)` | Like `volume_get` but returns `undef` if not found (safe for idempotent delete) |
 | `volume_create($name, $size_kb, $pool_id)` | Create a new volume |
-| `volume_delete($vol_uuid)` | Delete volume (cascades children by default) |
+| `volume_delete($vol_uuid)` | Delete volume (safe defaults; callers pass explicit flags for cascade/force) |
 | `volume_modify($vol_uuid, $new_name)` | Rename a volume |
 | `volume_snapshot($vol_name, $snap_name)` | Take a snapshot |
 | `volume_rollback($vol_uuid, $snap_name)` | Roll back to snapshot |
@@ -304,7 +279,7 @@ my $client = PVE::Storage::QuantaStor::APIClient->new(
 | `volume_acl_add($vol_uuid, $host_iqn)` | Grant host access to volume |
 | `volume_acl_remove($vol_uuid, $host_id)` | Revoke host access |
 | `session_enum($vol_name)` | Active iSCSI sessions for a volume |
-| `wait_for_session_gone($vol_name, $max_wait)` | Poll `sessionEnum` until QS reports the volume idle (bridges the PVE/QS GC gap before rollback/rename) |
+| `wait_for_session_gone($vol_name, $max_wait)` | Poll `sessionEnum` until QS reports the volume idle (bridges the PVE/QS session GC gap before rollback/rename) |
 | `host_get($iqn)` | Look up host (returns `undef` if not found) |
 | `host_add($hostname, $iqn)` | Register an initiator host |
 | `host_remove($host_id)` | Deregister a host |
@@ -332,12 +307,83 @@ my $iscsi = PVE::Storage::QuantaStor::ISCSIManager->new(
 | `login($target_iqn)` | Discover + login; dies on failure |
 | `logout($target_iqn)` | Logout; returns 0 if not logged in (non-fatal) |
 | `is_logged_in($target_iqn)` | Check active session via `iscsiadm -m session` |
-| `device_path($target_iqn, $lun)` | Returns `/dev/disk/by-path/ip-...-iscsi-...-lun-N` (honors any non-3260 port on the configured portal) |
-| `wait_for_logout($target_iqn, $max_wait)` | Poll until session gone or timeout |
+| `device_path($target_iqn, $lun)` | Returns `/dev/disk/by-path/ip-...-iscsi-...-lun-N` (honors configured portal port) |
+| `wait_for_logout($target_iqn, $max_wait)` | Poll until session gone or timeout; caller must invoke `logout()` first |
 | `wait_for_device($target_iqn, $lun, $max_wait)` | Poll the by-path symlink until present, default 30s timeout |
 
 Device paths use `/dev/disk/by-path/` for stability across reboots, unlike ephemeral
 `/dev/sdX` assignments.
+
+---
+
+### `PVE::Storage::Custom::QuantaStor`
+
+The top-level PVE storage plugin. Inherits from `PVE::Storage::Plugin` and wires
+`APIClient` and `ISCSIManager` together to implement all required PVE storage hooks.
+
+| PVE Hook | What it does |
+|---|---|
+| `type` | Returns `'quantastor'` |
+| `activate_storage` | Verify API connectivity; auto-register PVE node as iSCSI initiator host |
+| `status` | `pool_get` → `(total, free, used, active)` |
+| `list_images` | `volume_enum` filtered by pool + PVE naming convention |
+| `path` | `volume_get` → IQN → `/dev/disk/by-path/` stable device path |
+| `volume_size_info` | `volume_get` → size in bytes |
+| `alloc_image` | `volume_create` → returns volname |
+| `free_image` | logout → ACL remove → `volume_delete` (best-effort teardown; only delete fails loud) |
+| `activate_volume` | `volume_acl_add` → iSCSI login → `wait_for_device` (dies with a clear message if the by-path symlink hasn't appeared within 30s) |
+| `deactivate_volume` | iSCSI logout → `wait_for_logout` → `volume_acl_remove` |
+| `volume_resize` | `volume_modify` with new size |
+| `volume_snapshot` | `volume_snapshot` (snap stored as `<volname>_<snap>`) |
+| `volume_snapshot_delete` | `volume_get(snap)` → `volume_delete` |
+| `volume_snapshot_rollback` | logout (if session active) → `wait_for_session_gone` (QS-side GC) → `volume_rollback`; no re-login (PVE calls `activate_volume` on next start) |
+| `volume_rollback_is_possible` | Timestamp comparison across sibling snapshots |
+| `create_base` | offline → rename `vm-`→`base-` → template snapshot → online |
+| `clone_image` | `volume_clone` from template snapshot → ACL → login |
+| `volume_has_feature` | snapshot, clone, template, copy, sparseinit |
+| `storage_can_replicate` | Returns 0 (not supported in this release) |
+
+---
+
+## Known Limitations
+
+### iSCSI LUN field
+
+The QuantaStor REST API returns a `lun` field on volume objects. This is an internal
+pool-level concept and does not reflect the wire LUN. All volumes are presented at
+iSCSI LUN 0 regardless of what the API reports. The plugin ignores the API field and
+always constructs device paths with `-lun-0`.
+
+### Snapshot rollback requires VM to be stopped
+
+PVE enforces this: it calls `vm_stop` (5-second graceful timeout) before invoking the
+rollback hook, then aborts with `"unable to rollback vm: vm is running"` if QEMU is
+still alive. Rolling back a running VM is not supported.
+
+If a rollback is interrupted and the VM ends up with a `lock: rollback` config entry,
+unlock it with:
+```bash
+qm unlock <vmid>
+# or: Datacenter → VM → More → Unlock
+```
+
+### Rollback time varies
+
+QuantaStor's server-side session tracker takes a variable amount of time (typically
+5–30 seconds) to release after an iSCSI logout. The plugin polls `sessionEnum` and
+waits up to 30 seconds before calling the rollback API. This is normal behaviour — if
+rollback consistently takes close to 30s, contact OSNEXUS support to investigate the
+appliance's session GC configuration.
+
+---
+
+## Supported PVE Versions
+
+| PVE Version | Status |
+|---|---|
+| 9.1.1 | Validated — dpkg install tested, full VM lifecycle verified |
+| 8.x | No known incompatibilities; `PVE::Storage::Plugin` interface is stable across versions |
+| Future | Plugin tracks `PVE::Storage::Plugin` interface — no PVE source patches needed |
 
 ---
 
@@ -352,8 +398,8 @@ on live PVE 9.1.1 + QuantaStor: create → snapshot → rollback → template �
 
 Debian package `pve-storage-quantastor_0.2.0-1_all.deb` builds cleanly with `dpkg-buildpackage`
 and installs successfully on PVE 9.1.1. Plugin lives in `/usr/share/perl5/PVE/Storage/Custom/`
-(PVE's auto-discovery path for third-party plugins). `postinst` restarts PVE services; `prerm`
-warns if active `quantastor` storage entries exist. Build via `bash build-deb.sh`.
+(PVE's auto-discovery path for third-party plugins). `postinst` restarts PVE services and
+registers a dpkg trigger so the UI panel survives future `pve-manager` upgrades automatically.
 
 ### ~~Phase 5 — UI enhancements~~ ✅ Complete
 
@@ -367,7 +413,7 @@ Removed cleanly by `prerm` on uninstall.
 
 ### Phase 6 — Migration tooling
 
-For deployments currently running the legacy patched plugin:
+For any deployments still running a legacy patch-based QuantaStor integration:
 
 - Script to enumerate volumes under the old `zfs`/`quantastor` storage entry
 - Move VM disk associations to the new `quantastor` storage type non-destructively
@@ -401,81 +447,6 @@ tests in the relevant test file (`t/01-api-client.t`, `t/02-iscsi-manager.t`, or
 
 ---
 
-### `PVE::Storage::Custom::QuantaStor`
-
-The top-level PVE storage plugin. Inherits from `PVE::Storage::Plugin` and wires
-`APIClient` and `ISCSIManager` together to implement all required PVE storage hooks.
-
-| PVE Hook | What it does |
-|---|---|
-| `type` | Returns `'quantastor'` |
-| `activate_storage` | Verify API connectivity; auto-register PVE node as iSCSI initiator host |
-| `status` | `pool_get` → `(total, free, used, active)` |
-| `list_images` | `volume_enum` filtered by pool + PVE naming convention |
-| `path` | `volume_get` → IQN → `/dev/disk/by-path/` stable device path |
-| `volume_size_info` | `volume_get` → size in bytes |
-| `alloc_image` | `volume_create` → returns volname |
-| `free_image` | logout → ACL remove → `volume_delete` |
-| `activate_volume` | `volume_acl_add` → iSCSI login → `wait_for_device` (dies with a clear message if the by-path symlink hasn't appeared within 30s) |
-| `deactivate_volume` | iSCSI logout → `wait_for_logout` → `volume_acl_remove` |
-| `volume_resize` | `volume_modify` with new size |
-| `volume_snapshot` | `volume_snapshot` (snap stored as `<volname>_<snap>`) |
-| `volume_snapshot_delete` | `volume_get(snap)` → `volume_delete` |
-| `volume_snapshot_rollback` | logout (if session active) → `wait_for_session_gone` (QS-side) → `volume_rollback`; no re-login (PVE calls `activate_volume` on next start) |
-| `volume_rollback_is_possible` | Timestamp comparison across sibling snapshots |
-| `create_base` | offline → rename `vm-`→`base-` → template snapshot → online |
-| `clone_image` | `volume_clone` from template snapshot → ACL → login |
-| `volume_has_feature` | snapshot, clone, template, copy, sparseinit |
-| `storage_can_replicate` | Returns 0 (not supported in this release) |
-
----
-
-## Known Limitations
-
-### PVE web UI after `pve-manager` upgrade
-
-The `postinst` script injects a `<script>` tag into `/usr/share/pve-manager/index.html.tpl`
-to register the QuantaStor UI panel. If `pve-manager` is upgraded it overwrites this file,
-removing the tag. The storage backend continues to work (CLI/API unaffected), but the
-**Datacenter → Storage → Add → QuantaStor** option disappears from the UI.
-
-**Fix:** reinstall the plugin after a `pve-manager` upgrade:
-```bash
-dpkg -i pve-storage-quantastor_0.2.0-1_all.deb
-```
-
-A dpkg trigger to automate this is planned for a future release.
-
-### iSCSI LUN field
-
-The QuantaStor REST API returns a `lun` field on volume objects. This is an internal
-pool-level concept and does not reflect the wire LUN. All volumes are presented at
-iSCSI LUN 0 regardless of what the API reports. The plugin ignores the API field and
-always constructs device paths with `-lun-0`.
-
-### Snapshot rollback requires VM to be stopped
-
-PVE enforces this: it calls `vm_stop` (5-second graceful timeout) before invoking the
-rollback hook, then aborts with `"unable to rollback vm: vm is running"` if QEMU is
-still alive. Rolling back a running VM is not supported.
-
-If a rollback is interrupted and the VM ends up with a `lock: rollback` config entry,
-unlock it with:
-```bash
-qm unlock <vmid>
-# or: Datacenter → VM → More → Unlock
-```
-
----
-
-## Supported PVE Versions
-
-| PVE Version | Status |
-|---|---|
-| 8.4.0 | Legacy patch files in `legacy/patches/`; new plugin requires no version-specific changes |
-| 9.1.1 | Validated — dpkg install tested, all PVE services start cleanly |
-| Future | New plugin tracks `PVE::Storage::Plugin` interface — no patches needed |
-
 ## License
 
-See repository root for license information.
+See `LICENSE` in the repository root for license information.
