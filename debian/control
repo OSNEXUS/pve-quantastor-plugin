@@ -1,0 +1,27 @@
+Source: pve-storage-quantastor
+Section: admin
+Priority: optional
+Maintainer: OSNexus <support@osnexus.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+Homepage: https://github.com/osnexus/quantastor-pve-plugin
+
+Package: pve-storage-quantastor
+Architecture: all
+Depends: ${misc:Depends},
+ perl,
+ libpve-storage-perl,
+ libwww-perl,
+ liburi-perl,
+ libjson-pp-perl | libjson-perl,
+ open-iscsi
+Description: QuantaStor storage plugin for Proxmox VE
+ Integrates QuantaStor managed storage appliances as a first-class iSCSI
+ block storage backend for Proxmox VE virtual machines and containers.
+ .
+ Registers storage type 'quantastor' with PVE. All volume management is
+ performed via the QuantaStor REST API; iSCSI login and logout are handled
+ locally via iscsiadm. No PVE core files are modified.
+ .
+ Supports: volume create/delete/resize, snapshots, rollback, template
+ creation, and VM cloning from base images.

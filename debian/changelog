@@ -1,0 +1,11 @@
+pve-storage-quantastor (0.2.0-1) unstable; urgency=medium
+
+  * Alpha release v0.2.0.
+  * Registers PVE storage type 'quantastor' — no PVE core file patching required.
+  * PVE::Storage::QuantaStor::APIClient: OO REST client for QuantaStor API.
+  * PVE::Storage::QuantaStor::ISCSIManager: iSCSI initiator lifecycle management.
+  * PVE::Storage::QuantaStorPlugin: full PVE storage plugin implementation
+    covering all hooks: activate, status, list, alloc, free, path, resize,
+    snapshot, rollback, clone, and template creation.
+
+ -- OSNexus <support@osnexus.com>  Thu, 26 Mar 2026 00:00:00 +0000

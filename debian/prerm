@@ -1,0 +1,27 @@
+#!/bin/sh
+set -e
+
+TPLFILE=/usr/share/pve-manager/index.html.tpl
+
+remove_script_tag() {
+    if [ -f "$TPLFILE" ]; then
+        sed -i '/quantastor-storage\.js/d' "$TPLFILE"
+    fi
+}
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        # Warn if any storage entries of type 'quantastor' exist in storage.cfg
+        cfg=/etc/pve/storage.cfg
+        if [ -f "$cfg" ] && grep -q '^quantastor:' "$cfg" 2>/dev/null; then
+            echo "WARNING: storage.cfg still contains 'quantastor' storage entries." >&2
+            echo "Remove them via the PVE UI or pvesm before uninstalling." >&2
+        fi
+
+        # Remove UI script tag from the PVE web UI HTML template.
+        remove_script_tag
+        ;;
+esac
+
+#DEBHELPER#
+exit 0

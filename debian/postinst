@@ -1,0 +1,42 @@
+#!/bin/sh
+set -e
+
+TPLFILE=/usr/share/pve-manager/index.html.tpl
+SCRIPTTAG='    <script type="text/javascript" src="/pve2/js/quantastor-storage.js"></script>'
+
+inject_script_tag() {
+    if [ -f "$TPLFILE" ] && ! grep -qF 'quantastor-storage.js' "$TPLFILE"; then
+        # Insert our <script> tag on the line after pvemanagerlib.js loads,
+        # so PVE.Utils.storageSchema exists before we extend it.
+        sed -i '/pvemanagerlib\.js/a\'"$SCRIPTTAG" "$TPLFILE"
+    fi
+}
+
+case "$1" in
+    configure)
+        # Ensure the iSCSI initiator daemon is enabled and running.
+        # open-iscsi may be installed but iscsid inactive on a fresh node.
+        if systemctl list-unit-files iscsid.service >/dev/null 2>&1; then
+            systemctl enable iscsid 2>/dev/null || true
+            if ! systemctl is-active --quiet iscsid 2>/dev/null; then
+                systemctl start iscsid || true
+            fi
+        fi
+
+        # Inject UI script tag into the PVE web UI HTML template.
+        inject_script_tag
+
+        # Restart PVE services so the new storage type is registered.
+        # pve-cluster intentionally NOT in this list — Custom plugins are
+        # auto-discovered by pvedaemon; restarting pve-cluster would touch
+        # the cluster config FS for no benefit and high blast radius.
+        for svc in pvedaemon pveproxy pvestatd; do
+            if systemctl is-active --quiet "$svc" 2>/dev/null; then
+                systemctl restart "$svc" || true
+            fi
+        done
+        ;;
+esac
+
+#DEBHELPER#
+exit 0
