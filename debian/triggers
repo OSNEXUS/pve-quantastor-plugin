@@ -1,0 +1,4 @@
+# Re-run postinst when pve-manager is upgraded so we can re-inject
+# the quantastor-storage.js <script> tag into index.html.tpl.
+# interest-noawait avoids making pve-manager wait on our trigger.
+interest-noawait pve-manager

@@ -36,6 +36,21 @@ case "$1" in
             fi
         done
         ;;
+
+    triggered)
+        # Fired automatically when pve-manager is upgraded (declared in
+        # debian/triggers). pve-manager overwrites index.html.tpl on every
+        # upgrade, removing our <script> tag — re-inject it here so the
+        # QuantaStor UI panel survives pve-manager updates without any
+        # manual reinstall.
+        inject_script_tag
+
+        # Only pveproxy needs a restart — it renders the template on each
+        # request so the updated file takes effect immediately after restart.
+        if systemctl is-active --quiet pveproxy 2>/dev/null; then
+            systemctl restart pveproxy || true
+        fi
+        ;;
 esac
 
 #DEBHELPER#
