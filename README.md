@@ -272,6 +272,7 @@ my $client = PVE::Storage::QuantaStor::APIClient->new(
 | `volume_get_or_undef($name_or_uuid)` | Like `volume_get` but returns `undef` if not found (safe for idempotent delete) |
 | `volume_create($name, $size_kb, $pool_id)` | Create a new volume |
 | `volume_delete($vol_uuid)` | Delete volume (safe defaults; callers pass explicit flags for cascade/force) |
+| `volume_resize($vol_id, $pool_id, $new_size_bytes)` | Grow a volume to `$new_size_bytes` (`storageVolumeResize`) — shrinking is not supported by QuantaStor |
 | `volume_modify($vol_uuid, $new_name)` | Rename a volume |
 | `volume_snapshot($vol_name, $snap_name)` | Take a snapshot |
 | `volume_rollback($vol_uuid, $snap_name)` | Roll back to snapshot |
@@ -333,7 +334,7 @@ The top-level PVE storage plugin. Inherits from `PVE::Storage::Plugin` and wires
 | `free_image` | logout → ACL remove → `volume_delete` (best-effort teardown; only delete fails loud) |
 | `activate_volume` | `volume_acl_add` → iSCSI login → `wait_for_device` (dies with a clear message if the by-path symlink hasn't appeared within 30s) |
 | `deactivate_volume` | iSCSI logout → `wait_for_logout` → `volume_acl_remove` |
-| `volume_resize` | `volume_modify` with new size |
+| `volume_resize` | `storageVolumeResize` with `newSizeInBytes`; waits for QS session GC first (same guard as rollback) — shrinking not supported |
 | `volume_snapshot` | `volume_snapshot` (snap stored as `<volname>_<snap>`) |
 | `volume_snapshot_delete` | `volume_get(snap)` → `volume_delete` |
 | `volume_snapshot_rollback` | logout (if session active) → `wait_for_session_gone` (QS-side GC) → `volume_rollback`; no re-login (PVE calls `activate_volume` on next start) |
@@ -381,7 +382,8 @@ appliance's session GC configuration.
 
 | PVE Version | Status |
 |---|---|
-| 9.1.1 | Validated — dpkg install tested, full VM lifecycle verified |
+| 9.2.x | Validated — upgrade from 9.1.1 tested, full 8-step VM lifecycle verified (create → snapshot → rollback → delete snapshot → resize → destroy) |
+| 9.1.x | Validated — dpkg install tested, full VM lifecycle verified |
 | 8.x | No known incompatibilities; `PVE::Storage::Plugin` interface is stable across versions |
 | Future | Plugin tracks `PVE::Storage::Plugin` interface — no PVE source patches needed |
 
