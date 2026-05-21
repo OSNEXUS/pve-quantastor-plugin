@@ -46,7 +46,7 @@ Returns the PVE storage API version this plugin implements.
 
 =cut
 
-sub api { return 13 }
+sub api { return 14 }
 
 # ---------------------------------------------------------------------------
 # Constants
