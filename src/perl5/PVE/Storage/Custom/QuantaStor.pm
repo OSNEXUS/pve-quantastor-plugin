@@ -614,11 +614,21 @@ sub volume_resize {
 
     my $name   = _bare_name($class, $volname);
     my $client = _client($scfg, $storeid);
+    my $iscsi  = _iscsi($scfg, $storeid);
 
-    my $vol        = $client->volume_get($name);
-    my $size_kb    = int($size / 1024);
+    my $vol      = $client->volume_get($name);
+    my $pool_raw = _raw_pool_id($scfg->{pool_id});
 
-    $client->volume_modify($vol->{id}, $name, size => $size_kb);
+    # storageVolumeResize rejects on live QS-side sessions, just like rollback.
+    # PVE calls deactivate_volume before resize, but the QS session tracker
+    # lags the PVE-side logout by several seconds — wait it out.
+    if ($iscsi->is_logged_in($vol->{iqn})) {
+        $iscsi->logout($vol->{iqn});
+        $iscsi->wait_for_logout($vol->{iqn});
+    }
+    $client->wait_for_session_gone($name);
+
+    $client->volume_resize($vol->{id}, $pool_raw, $size);
 
     return $size;
 }
