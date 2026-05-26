@@ -143,6 +143,21 @@ bash build-deb.sh
 
 ## Configuration
 
+### How the plugin stores credentials
+
+The QuantaStor API password is **never** written to `/etc/pve/storage.cfg`. On
+storage create/update, the plugin's `on_add_hook` / `on_update_hook` writes it
+to `/etc/pve/priv/storage/<storeid>.pw` (mode `0600`, owner `root:www-data`),
+the same convention upstream PVE uses for CIFS and PBS passwords. `/etc/pve/`
+is the pmxcfs cluster filesystem, so the password file is automatically
+replicated to every node in the cluster.
+
+If `<storeid>.pw` is missing or empty on a node, every plugin operation on
+that node fails. Recent plugin builds (≥ 0.2.0 post-2026-05-26) surface this
+as an explicit error naming the file and remediation; older builds silently
+shipped an empty password and surfaced a misleading `[err=26] Authentication
+check failed` from QuantaStor.
+
 ### Web UI
 
 Go to **Datacenter → Storage → Add → QuantaStor**.
@@ -159,25 +174,30 @@ Go to **Datacenter → Storage → Add → QuantaStor**.
 | iSCSI Portal | Advanced | Portal address for iSCSI login — defaults to API Host if left blank |
 | SSL Verify | Advanced | Enable SSL certificate verification — leave off for self-signed certs |
 
-`API Host`, `Username`, and `Pool` are fixed after creation. All other fields can be edited later.
+`API Host`, `Username`, and `Pool` are fixed after creation. All other
+fields can be edited later via the UI.
 
 ### CLI
 
-Add storage via `pvesm` — the password is stored securely and never written to `storage.cfg`:
+The same configuration via `pvesm`:
 
 ```bash
 pvesm add quantastor my-quantastor \
   --api_host 10.0.0.1 \
   --username admin \
-  --password <password> \
+  --password '<password>' \
   --pool_id <pool-name-or-uuid> \
   --content images \
   --portal 10.0.0.1 \
   --ssl_verify 0
 ```
 
-`--portal` and `--ssl_verify` are optional. `--portal` defaults to `--api_host` if omitted;
-`--ssl_verify` defaults to `0` (off, suitable for self-signed certificates).
+Single-quote the password so the shell does not interpret special characters
+(`$`, `!`, backticks, etc.).
+
+`--portal` and `--ssl_verify` are optional. `--portal` defaults to `--api_host`
+if omitted; `--ssl_verify` defaults to `0` (off, suitable for self-signed
+certificates).
 
 The resulting `storage.cfg` entry contains no plaintext password:
 
@@ -193,7 +213,117 @@ quantastor: my-quantastor
 ```
 
 `api_host`, `username`, and `pool_id` are fixed after creation. All other
-fields are optional and can be updated without removing the storage.
+fields can be updated later via `pvesm set` (or the UI) without removing
+the storage. **Avoid `pvesm remove` + `pvesm add` to apply changes** — the
+remove path runs `on_delete_hook` which deletes the password file across the
+cluster; if the subsequent re-add doesn't capture the password cleanly, you
+end up with the missing-`.pw`-file failure mode described above.
+
+### Verifying your setup
+
+After the create, the password file should exist on **every** cluster node:
+
+```bash
+# Run on each PVE node:
+ls -la /etc/pve/priv/storage/
+# Expected: <storeid>.pw present, ~ N bytes (your password length + 1)
+
+# Confirm activation works:
+pvesm status --storage <storeid>
+# Expected: Status = active, sizes populated
+```
+
+If the `.pw` file is present on the creating node but missing on others,
+wait 5 seconds for pmxcfs to converge, then re-check. If it's still missing
+after that, pmxcfs replication is broken — investigate corosync/pmxcfs
+health before working around with manual copies.
+
+If the `.pw` file is missing on every node, the password was not captured at
+create time (see [Troubleshooting](#troubleshooting) below).
+
+---
+
+## Troubleshooting
+
+### `Authentication check failed ... [err=26]` from QuantaStor
+
+The plugin sent credentials to the appliance and the appliance rejected
+them. Three possibilities, in decreasing order of frequency:
+
+1. **The `.pw` file is missing on the local node** — pre-2026-05-26 plugin
+   builds silently ship an empty password in this case. Check:
+   ```bash
+   ls -la /etc/pve/priv/storage/<storeid>.pw
+   ```
+   If absent or 0 bytes, write it manually:
+   ```bash
+   umask 077
+   echo '<password>' > /etc/pve/priv/storage/<storeid>.pw
+   chmod 0600 /etc/pve/priv/storage/<storeid>.pw
+   ```
+   pmxcfs will replicate it to the rest of the cluster within seconds.
+
+2. **The credentials really are wrong** — verify with `curl` directly,
+   which bypasses the plugin entirely:
+   ```bash
+   curl -k -u admin:'<password>' \
+     "https://<api_host>:8153/qstorapi/storagePoolGet?storagePool=<pool>"
+   ```
+   If `curl` also returns err=26, fix the password in QuantaStor's UI then
+   re-write `<storeid>.pw` on the PVE node.
+
+3. **Special characters in the password got mangled** — if the password
+   contains shell metacharacters (`$`, `!`, backticks) and you used
+   `pvesm add` without single-quoting it, the shell may have expanded or
+   eaten parts of it. Re-set with `pvesm set <storeid> -password '<pw>'`
+   (single-quoted) and try again.
+
+### `QuantaStor: no password configured for storage 'X' on node 'Y'`
+
+Surfaced by plugin builds ≥ 0.2.0 post-2026-05-26 in exactly the situation
+that used to produce err=26 above. The message names the storeid, the node,
+the expected file path, and the `pvesm set` remediation command — follow it
+verbatim.
+
+### `Plugin "..." is implementing an older storage API, an upgrade is recommended`
+
+Cosmetic warning that fires from every PVE daemon's plugin scan on PVE 9.2+
+because the plugin declares `api()=13` for 9.1 compatibility. See
+[Known Limitations](#older-storage-api-warning-on-pve-92).
+
+### `Error loading storage plugin: implements an API version newer than current (N > M)`
+
+Hard-block — the plugin's declared API version is higher than your PVE
+version supports, so PVE refuses to load it. The storage type `quantastor`
+will not appear in `pvesm` or the UI. Resolution: ensure you are on plugin
+0.2.0 from 2026-05-26 or later (where `api()` was reverted from 14 back to
+13 for 9.1 compat).
+
+### Storage shows `active` on some nodes, `inactive` on others
+
+If the inactive node prints the "no password configured" error, follow that
+message. If it prints `[err=26]`, manually backfill the `.pw` file as in
+**err=26** above. If it prints a network/SSL error, the inactive node
+cannot reach `api_host:8153` — check firewall/routing, not the plugin.
+
+### A `qm move-disk` or VM migration to another cluster node fails
+
+Most often: the destination node cannot load the plugin (wrong PVE/plugin
+version combination) or is missing the `.pw` file. Check on the destination:
+
+```bash
+pvesm status --storage <storeid>
+ls -la /etc/pve/priv/storage/<storeid>.pw
+journalctl -u pvedaemon --since '5 min ago' | grep QuantaStor
+```
+
+If migration fails with `storage type 'quantastor' not supported`, the
+storage entry is missing `shared 1`. Plugin builds ≥ 0.2.0 post-2026-05-26
+default this on new storage adds; for storage created on an earlier build,
+backfill once:
+```bash
+pvesm set <storeid> -shared 1
+```
 
 ---
 
@@ -376,16 +506,76 @@ waits up to 30 seconds before calling the rollback API. This is normal behaviour
 rollback consistently takes close to 30s, contact OSNEXUS support to investigate the
 appliance's session GC configuration.
 
+### "Older storage API" warning on PVE 9.2+
+
+The plugin declares `api() = 13` so it loads on both PVE 9.1.x and 9.2.x. PVE 9.2
+raised its `APIVER` to 14 and prints the following at every plugin scan:
+
+```
+Plugin "PVE::Storage::Custom::QuantaStor" is implementing an older storage API, an upgrade is recommended
+```
+
+This is **cosmetic**. The plugin functions identically on 9.1 and 9.2 — none of the
+hooks we override changed between API versions 13 and 14. The warning appears in
+`/var/log/syslog` and `journalctl` from every PVE daemon (`pvestatd`, `pvedaemon`,
+`pveproxy`, `pvescheduler`) — roughly 10–20 lines per minute per node on 9.2.
+
+We chose 9.1+9.2 compatibility over silencing the warning. If the noise is
+problematic in your environment, filter it out:
+
+```bash
+# View journal excluding the warning
+journalctl | grep -v 'implementing an older storage API'
+```
+
+Or add a rsyslog filter at `/etc/rsyslog.d/99-quantastor-quiet.conf`:
+
+```
+:msg, contains, "implementing an older storage API" stop
+```
+
+A future plugin release will revisit this once PVE 9.1.x support is no longer needed.
+
 ---
 
 ## Supported PVE Versions
 
-| PVE Version | Status |
-|---|---|
-| 9.2.x | Validated — upgrade from 9.1.1 tested, full 8-step VM lifecycle verified (create → snapshot → rollback → delete snapshot → resize → destroy) |
-| 9.1.x | Validated — dpkg install tested, full VM lifecycle verified |
-| 8.x | No known incompatibilities; `PVE::Storage::Plugin` interface is stable across versions |
-| Future | Plugin tracks `PVE::Storage::Plugin` interface — no PVE source patches needed |
+PVE's storage subsystem hard-blocks a plugin whose declared `api()` lies
+outside the range `[APIVER - APIAGE, APIVER]`. The plugin currently declares
+`api()=13`. Empirically verified against live nodes (2026-05-26):
+
+| PVE Version | `APIVER` | Plugin loads? | Notes |
+|---|---|---|---|
+| **9.2.x** | 14 | ✓ loads, cosmetic "older storage API" warning | Full lifecycle validated (create → snapshot → rollback → resize → destroy). Warning is informational; see [Known Limitations](#older-storage-api-warning-on-pve-92). |
+| **9.1.x** | 13 | ✓ loads silently (exact match) | Validated against 9.1.1 in a 2-node cluster with 9.2. Full lifecycle. |
+| **8.4.0** | 11 | ✗ hard-blocked: `implements newer than current (13 > 11)` | Not supported by this plugin. |
+| **Future PVE (APIVER ≥ 18)** | ≥18 | ✗ hard-blocked: `API version too old` | Plugin will need to bump `api()` once `APIVER - APIAGE > 13`. Currently APIAGE=5, so this isn't an issue until APIVER reaches 18 (likely PVE 10.x+). |
+
+### Mixed-version cluster guidance
+
+Proxmox does not officially support cluster nodes on different *major*
+versions (e.g., 8.x + 9.x in the same cluster). For this plugin specifically:
+
+- **All 9.x nodes can be mixed** — 9.1 and 9.2 in the same cluster work
+  fine. The 9.2 nodes will print the cosmetic warning; the 9.1 nodes will
+  load silently. Storage operations work transparently across both.
+- **Do not include 8.x nodes** — the plugin won't load there at all, and
+  any storage operation routed to an 8.x node (e.g., a VM migration target)
+  will fail because the `quantastor` type isn't registered.
+
+### Plugin upgrade guidance
+
+Before pushing a new plugin .deb to a cluster:
+
+1. Check the new plugin's `api()` value (`grep 'sub api ' /usr/share/perl5/PVE/Storage/Custom/QuantaStor.pm`).
+2. Confirm `api()` is `≤ APIVER` on every cluster node (`grep APIVER /usr/share/perl5/PVE/Storage.pm`).
+3. Upgrade one node first and verify the plugin loads (`pvesm status` does not print "Error loading"). Only then upgrade the rest.
+
+A plugin whose `api()` exceeds the cluster's lowest `APIVER` will hard-block
+on those nodes. **Existing storage entries in `storage.cfg` are not removed**
+when this happens, but any plugin operation on those nodes (status,
+activate, free_image) errors out. Recovery is either to upgrade PVE on the
+affected nodes or downgrade the plugin.
 
 ---
 

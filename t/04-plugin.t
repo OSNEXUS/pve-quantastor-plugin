@@ -128,6 +128,66 @@ subtest 'options marks api_host and pool_id as fixed' => sub {
     ok $opts->{nodes}{optional}, 'nodes is optional';
 };
 
+subtest 'options accepts shared field (required for live/offline migration)' => sub {
+    # QemuMigrate.pm classifies every non-shared volume as "local" and then
+    # rejects unrecognized storage types with "storage type 'quantastor' not
+    # supported". The plugin must accept `shared` so storage.cfg can carry
+    # shared=1, which is what makes PVE's migration scanner skip our volumes.
+    my $opts = $CLASS->options();
+    ok exists $opts->{shared}, 'shared field declared in options';
+    ok $opts->{shared}{optional}, 'shared is optional';
+};
+
+subtest 'on_add_hook defaults shared=1 (enables migration)' => sub {
+    # On a fresh storage create, $scfg comes in without `shared`. We default
+    # it to 1 so the user doesn't have to know about the migration scanner
+    # requirement. Pmxcfs writes this back to storage.cfg via PVE's write
+    # path (on_add_hook is called with $scfg by reference).
+    my $scfg = {
+        api_host => '10.0.0.1', username => 'admin', pool_id => 'p',
+    };
+    $CLASS->on_add_hook('qs-test', $scfg);   # no password kwarg — skips _set_password
+    is $scfg->{shared}, 1, 'shared defaulted to 1';
+};
+
+subtest 'on_add_hook respects explicit shared=0' => sub {
+    # If user passes -shared 0 they get exactly what they asked for, even
+    # though migration won't work. Trust the user; never silently override.
+    my $scfg = {
+        api_host => '10.0.0.1', username => 'admin', pool_id => 'p',
+        shared => 0,
+    };
+    $CLASS->on_add_hook('qs-test', $scfg);   # no password kwarg — skips _set_password
+    is $scfg->{shared}, 0, 'explicit shared=0 preserved';
+};
+
+subtest 'on_update_hook does NOT touch shared (only the changes are passed in)' => sub {
+    # On PVE 9.2 with api>=13, the base on_update_hook_full passes $update
+    # (the changes only, not the full config) as the second arg to
+    # on_update_hook. Overriding shared here would clobber an explicit
+    # `pvesm set <id> -shared 0` the user made earlier. Legacy entries
+    # without shared need a one-time `pvesm set <id> -shared 1`.
+    my $update = {
+        content => 'images,backup',   # an unrelated update
+    };
+    $CLASS->on_update_hook('qs-test', $update);
+    ok !exists $update->{shared}, 'on_update_hook leaves shared alone';
+};
+
+subtest 'hooks return undef (PVE validates response.config as object)' => sub {
+    # PVE's API endpoint runs:
+    #   $res->{config} = $returned_config if $returned_config;
+    # and validates $res->{config} as an object. A truthy scalar return
+    # trips "config: type check ('object') failed". Both hooks must return
+    # undef unless they have actual auto-generated props (we don't).
+    my $rv1 = $CLASS->on_add_hook('qs-test',
+        { api_host => '10.0.0.1', username => 'admin', pool_id => 'p' });
+    is $rv1, undef, 'on_add_hook returns undef';
+
+    my $rv2 = $CLASS->on_update_hook('qs-test', { content => 'images' });
+    is $rv2, undef, 'on_update_hook returns undef';
+};
+
 subtest '_client dies with actionable error when password is missing on local node' => sub {
     # In a PVE cluster, /etc/pve/priv/storage/ is pmxcfs-replicated but a node
     # can end up without the file (sync hiccup, manual cleanup, storage added

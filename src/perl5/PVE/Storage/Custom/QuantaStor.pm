@@ -99,11 +99,34 @@ sub _delete_password {
 sub on_add_hook {
     my ($class, $storeid, $scfg, %sensitive) = @_;
     _set_password($storeid, $sensitive{password}) if defined $sensitive{password};
+
+    # Default shared=1. QuantaStor exports each volume as an iSCSI LUN that
+    # every node with ACL access sees identically — the storage is shared by
+    # nature, not local. Without this, PVE's QemuMigrate.pm scanner classifies
+    # the volume as a "local disk" and bails with "storage type 'quantastor'
+    # not supported" because 'quantastor' isn't in its hardcoded migratable
+    # types regex (dir|btrfs|zfspool|lvmthin|lvm). Users can still override
+    # by passing -shared 0 explicitly if they have a reason to.
+    $scfg->{shared} = 1 unless exists $scfg->{shared};
+
+    # Must return undef (or a hashref of auto-generated props). PVE wraps the
+    # return value into the API response and validates it as an object —
+    # returning the scalar 1 from the assignment above trips a schema check
+    # with "config: type check ('object') failed".
+    return undef;
 }
 
 sub on_update_hook {
     my ($class, $storeid, $scfg, %sensitive) = @_;
+    # Note: on PVE 9.2 with api>=13 this is called by the base
+    # on_update_hook_full with $scfg = $update (the changes only, not the
+    # full config). Do NOT default shared here — we'd override an explicit
+    # `pvesm set <id> -shared 0` made earlier. The on_add_hook default + the
+    # `shared` field in options() are enough; existing storage entries
+    # without `shared 1` should backfill via a one-time `pvesm set <id>
+    # -shared 1` per the README.
     _set_password($storeid, $sensitive{password}) if defined $sensitive{password};
+    return undef;
 }
 
 sub on_delete_hook {
@@ -191,6 +214,7 @@ sub options {
         disable    => { optional => 1 },
         content    => { optional => 1 },
         bwlimit    => { optional => 1 },
+        shared     => { optional => 1 },   # see on_add_hook for default behavior
     };
 }
 
