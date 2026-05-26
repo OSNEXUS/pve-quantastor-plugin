@@ -313,8 +313,8 @@ Optional C<flags> (default 0).
 
 sub volume_resize {
     my ($self, $vol_id, $pool_id, $new_size_bytes, %opts) = @_;
-    croak "volume_resize: vol_id is required"         unless defined $vol_id        && length $vol_id;
-    croak "volume_resize: pool_id is required"        unless defined $pool_id       && length $pool_id;
+    croak "volume_resize: vol_id is required"        unless defined $vol_id        && length $vol_id;
+    croak "volume_resize: pool_id is required"       unless defined $pool_id       && length $pool_id;
     croak "volume_resize: new_size_bytes is required" unless defined $new_size_bytes && $new_size_bytes > 0;
 
     return $self->_get('storageVolumeResize',

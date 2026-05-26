@@ -128,6 +128,38 @@ subtest 'options marks api_host and pool_id as fixed' => sub {
     ok $opts->{nodes}{optional}, 'nodes is optional';
 };
 
+subtest '_client dies with actionable error when password is missing on local node' => sub {
+    # In a PVE cluster, /etc/pve/priv/storage/ is pmxcfs-replicated but a node
+    # can end up without the file (sync hiccup, manual cleanup, storage added
+    # before the node joined). Without this check, every API call returns a
+    # misleading QuantaStor err=26 "authentication check failed" — the customer
+    # bug we keep getting. The plugin must surface the actual cause.
+
+    no warnings 'redefine';
+    local *PVE::Storage::Custom::QuantaStor::_get_password = sub { undef };
+
+    eval {
+        PVE::Storage::Custom::QuantaStor::_client(
+            {
+                api_host => '10.0.0.1',
+                username => 'admin',
+                pool_id  => 'tank',
+            },
+            'qs-missing-pw',
+        );
+    };
+    my $err = $@;
+
+    like $err, qr/no password configured for storage 'qs-missing-pw'/,
+        'mentions storage id';
+    like $err, qr/on node '[^']+'/,
+        'mentions the local hostname';
+    like $err, qr|/etc/pve/priv/storage/qs-missing-pw\.pw|,
+        'mentions the expected file path';
+    like $err, qr/pvesm set qs-missing-pw -password/,
+        'mentions the remediation command';
+};
+
 # ---------------------------------------------------------------------------
 # 2. parse_volname
 # ---------------------------------------------------------------------------
@@ -595,6 +627,99 @@ subtest 'deactivate_volume logs out and removes ACL' => sub {
             ok $ua->was_called('storageVolumeAclAddRemoveEx'), 'ACL removed';
             my $p = $ua->params_for('storageVolumeAclAddRemoveEx');
             is $p->{modType}, 1, 'modType=1 (remove)';
+        }
+    );
+};
+
+# ---------------------------------------------------------------------------
+# 9b. volume_resize
+# ---------------------------------------------------------------------------
+
+subtest 'volume_resize online (running VM): force flag + rescan, no logout' => sub {
+    # Online resize: keep QEMU's fd valid by NOT logging out. Pass flags=2 to
+    # bypass QS's active-session rejection (err=76). Rescan so the kernel
+    # picks up the new LUN geometry before PVE's QMP block_resize fires.
+    with_mocks(
+        {
+            storageVolumeGet    => { id => $VOL_UUID, iqn => $VOL_IQN },
+            storageVolumeResize => { task => { id => 'task-1' } },
+        },
+        {
+            # session lookup for rescan's is_logged_in check
+            'session'       => "tcp: [1] $PORTAL:3260,1 $VOL_IQN (non-flash)\n",
+            'node --rescan' => '',
+        },
+        sub {
+            my ($ua, $runner) = @_;
+
+            my $new_size = 6 * 1024 * 1024 * 1024;   # 6 GiB
+            my $rv = $CLASS->volume_resize(make_scfg(), 'qs1', 'vm-100-disk-0',
+                                           $new_size, 1);
+            is $rv, $new_size, 'returns the new size';
+
+            ok  $ua->was_called('storageVolumeResize'),    'storageVolumeResize called';
+            my $p = $ua->params_for('storageVolumeResize');
+            is $p->{flags}, 2, 'flags=2 (force) passed to QS — bypasses err=76';
+            is $p->{newSizeInBytes}, $new_size, 'new size passed through';
+
+            ok  $runner->was_called('node --rescan'), 'iscsiadm --rescan called';
+            ok !$runner->was_called('node --logout'), 'NO iscsi logout (would destroy QEMU fd)';
+            ok !$runner->was_called('node --login'),  'NO iscsi login (already connected)';
+        }
+    );
+};
+
+subtest 'volume_resize stopped VM with lingering session: rescan still issued' => sub {
+    # PVE doesn't always call deactivate_volume on stop for shared iSCSI, so
+    # the session is typically still alive when volume_resize fires for a
+    # stopped VM. Rescan must still run so the kernel's cached LUN geometry
+    # gets refreshed — otherwise the next VM start sees stale size.
+    with_mocks(
+        {
+            storageVolumeGet    => { id => $VOL_UUID, iqn => $VOL_IQN },
+            storageVolumeResize => { task => { id => 'task-2' } },
+        },
+        {
+            # Session is alive even though VM is "stopped"
+            'session'       => "tcp: [1] $PORTAL:3260,1 $VOL_IQN (non-flash)\n",
+            'node --rescan' => '',
+        },
+        sub {
+            my ($ua, $runner) = @_;
+
+            my $new_size = 6 * 1024 * 1024 * 1024;
+            my $rv = $CLASS->volume_resize(make_scfg(), 'qs1', 'vm-100-disk-0',
+                                           $new_size, 0);
+            is $rv, $new_size, 'returns the new size';
+
+            my $p = $ua->params_for('storageVolumeResize');
+            is $p->{flags}, 2, 'flags=2 (force) — uniform with running path';
+
+            ok  $runner->was_called('node --rescan'), 'rescan issued unconditionally';
+            ok !$runner->was_called('node --logout'), 'no logout';
+        }
+    );
+};
+
+subtest 'volume_resize without active session: rescan is a no-op' => sub {
+    # Edge case: VM stopped AND iSCSI session already torn down. rescan should
+    # not try to issue iscsiadm --rescan in that state (ISCSIManager::rescan
+    # short-circuits when is_logged_in returns false).
+    with_mocks(
+        {
+            storageVolumeGet    => { id => $VOL_UUID, iqn => $VOL_IQN },
+            storageVolumeResize => { task => { id => 'task-3' } },
+        },
+        {
+            'session' => { _error => 'iscsiadm: No active sessions.' },
+        },
+        sub {
+            my ($ua, $runner) = @_;
+            my $new_size = 6 * 1024 * 1024 * 1024;
+            $CLASS->volume_resize(make_scfg(), 'qs1', 'vm-100-disk-0', $new_size, 0);
+
+            ok  $ua->was_called('storageVolumeResize'),  'resize still happens';
+            ok !$runner->was_called('node --rescan'),    'rescan command suppressed (no session)';
         }
     );
 };

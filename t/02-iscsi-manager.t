@@ -426,7 +426,68 @@ subtest 'wait_for_device requires target_iqn' => sub {
 };
 
 # ---------------------------------------------------------------------------
-# 9. Logger injection
+# 9. rescan
+# ---------------------------------------------------------------------------
+
+subtest 'rescan issues iscsiadm --rescan when session is active' => sub {
+    my ($mgr, $runner) = make_manager(
+        'session'        => "tcp: [1] 10.0.0.1:3260,1 iqn.test:vol (non-flash)\n",
+        'node --rescan'  => '',
+    );
+
+    my $rc = $mgr->rescan('iqn.test:vol');
+
+    ok $rc, 'rescan returns 1 on success';
+    ok $runner->was_called('node --rescan'), 'iscsiadm --rescan was issued';
+};
+
+subtest 'rescan passes correct targetname and portal' => sub {
+    my ($mgr, $runner) = make_manager(
+        'session'       => "tcp: [1] 10.0.0.1:3260,1 iqn.test:vol (non-flash)\n",
+        'node --rescan' => '',
+    );
+
+    $mgr->rescan('iqn.test:vol');
+
+    my ($call) = grep { $_->{sig} eq 'node --rescan' } @{ $runner->calls_made };
+    ok $call, 'rescan call found';
+    my @cmd = @{ $call->{cmd} };
+    ok grep({ $_ eq '--targetname' } @cmd), '--targetname flag present';
+    ok grep({ $_ eq 'iqn.test:vol' } @cmd), 'correct target IQN passed';
+    ok grep({ $_ eq '--portal' }     @cmd), '--portal flag present';
+    ok grep({ $_ eq '10.0.0.1' }    @cmd), 'correct portal passed';
+};
+
+subtest 'rescan returns 0 without issuing command when not logged in' => sub {
+    my ($mgr, $runner) = make_manager(
+        'session' => { _error => 'iscsiadm: No active sessions.' },
+    );
+
+    my $rc = $mgr->rescan('iqn.test:vol');
+
+    is $rc, 0, 'returns 0 when not logged in';
+    ok !$runner->was_called('node --rescan'), 'iscsiadm --rescan not called';
+};
+
+subtest 'rescan returns 0 on iscsiadm failure (non-fatal)' => sub {
+    my ($mgr, $runner) = make_manager(
+        'session'       => "tcp: [1] 10.0.0.1:3260,1 iqn.test:vol (non-flash)\n",
+        'node --rescan' => { _error => 'iscsiadm: error rescanning' },
+    );
+
+    my $rc = $mgr->rescan('iqn.test:vol');
+
+    is $rc, 0, 'returns 0 on rescan failure';
+};
+
+subtest 'rescan requires target_iqn' => sub {
+    my ($mgr) = make_manager();
+    eval { $mgr->rescan('') };
+    like $@, qr/target_iqn.*required/i, 'dies on missing target_iqn';
+};
+
+# ---------------------------------------------------------------------------
+# 10. Logger injection
 # ---------------------------------------------------------------------------
 
 subtest 'logger receives messages during login' => sub {

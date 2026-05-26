@@ -421,6 +421,19 @@ For any deployments still running a legacy patch-based QuantaStor integration:
 - Move VM disk associations to the new `quantastor` storage type non-destructively
 - Restore pristine PVE files: `apt reinstall pve-storage pve-manager`
 
+### Phase 7 — Container storage support (`rootdir`)
+
+Extend the plugin to support LXC container root filesystems in addition to VM disks.
+
+- Add `rootdir` to `plugindata` content types alongside `images`
+- Each LXC container would receive a dedicated thin-provisioned iSCSI LUN (same
+  provisioning model as VM disks)
+- Requires formatting the LUN with an appropriate filesystem and mounting it for
+  the container — more involved than VM disk support where QEMU handles the block
+  device directly
+- Update UI panel to allow `Container` content type selection
+- Validate with LXC container create / start / stop / destroy lifecycle on PVE
+
 ---
 
 ## Contributing

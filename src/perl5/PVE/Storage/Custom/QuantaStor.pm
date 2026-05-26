@@ -44,9 +44,17 @@ pvedaemon.
 
 Returns the PVE storage API version this plugin implements.
 
+Declared at 13 deliberately. PVE 9.1 has APIVER=13 (hard-blocks anything
+higher); PVE 9.2 has APIVER=14 with APIAGE=5, so 13 still loads — it just
+warns "implementing an older storage API" once at plugin load. None of
+the hooks we override changed between 13 and 14, so claiming 14 would
+silence the warning at the cost of breaking every 9.1.x host outright.
+Only bump if a new PVE version drops APIAGE such that 13 falls below
+APIVER-APIAGE, or if we adopt a 14+ only hook.
+
 =cut
 
-sub api { return 14 }
+sub api { return 13 }
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -235,7 +243,24 @@ sub _logger {
 # Password is read from the private password file, not from scfg.
 sub _client {
     my ($scfg, $storeid) = @_;
-    my $password = _get_password($storeid) // $scfg->{password} // '';
+
+    my $password = _get_password($storeid) // $scfg->{password};
+    if (!defined $password || $password eq '') {
+        # /etc/pve/priv/storage/ is pmxcfs (cluster-replicated), but if a
+        # node ends up without the password file — pmxcfs sync hiccup,
+        # manual cleanup, or storage was added before this node joined the
+        # cluster — every API call would hit a misleading QuantaStor
+        # "err=26 authentication check failed". Fail loudly with the actual
+        # cause instead.
+        my $node = hostname();
+        my $pwfile = _password_file($storeid);
+        die "QuantaStor: no password configured for storage '$storeid' on "
+          . "node '$node'.\n"
+          . "  Expected $pwfile to exist and be non-empty.\n"
+          . "  Re-set the password via 'pvesm set $storeid -password <pw>' "
+          . "or in the UI under storage edit.\n";
+    }
+
     return PVE::Storage::QuantaStor::APIClient->new(
         host       => $scfg->{api_host},
         port       => $scfg->{api_port} // $DEFAULT_API_PORT,
@@ -614,21 +639,25 @@ sub volume_resize {
 
     my $name   = _bare_name($class, $volname);
     my $client = _client($scfg, $storeid);
-    my $iscsi  = _iscsi($scfg, $storeid);
 
     my $vol      = $client->volume_get($name);
     my $pool_raw = _raw_pool_id($scfg->{pool_id});
 
-    # storageVolumeResize rejects on live QS-side sessions, just like rollback.
-    # PVE calls deactivate_volume before resize, but the QS session tracker
-    # lags the PVE-side logout by several seconds — wait it out.
-    if ($iscsi->is_logged_in($vol->{iqn})) {
-        $iscsi->logout($vol->{iqn});
-        $iscsi->wait_for_logout($vol->{iqn});
-    }
-    $client->wait_for_session_gone($name);
+    # flags=2 forces the resize through QuantaStor's "active session" check
+    # ([err=76]). This is essential for running VMs: logging out the iSCSI
+    # session would destroy the kernel block device QEMU has bound to its
+    # open fd, breaking the disk for the live guest. With force, the resize
+    # happens online and QEMU's fd stays valid against the same /dev/sdX.
+    $client->volume_resize($vol->{id}, $pool_raw, $size, flags => 2);
 
-    $client->volume_resize($vol->{id}, $pool_raw, $size);
+    # Always rescan — the iSCSI session is typically still alive even for
+    # stopped VMs (PVE doesn't call deactivate_volume on stop for shared
+    # iSCSI). Without a rescan, the kernel keeps its cached pre-resize LUN
+    # geometry; QEMU's next block_resize QMP (running) or fresh VM start
+    # (stopped) would then see the stale size. rescan is a no-op when no
+    # session is active.
+    my $iscsi = _iscsi($scfg, $storeid);
+    $iscsi->rescan($vol->{iqn});
 
     return $size;
 }

@@ -389,4 +389,42 @@ sub wait_for_device {
     return 0;
 }
 
+# ---------------------------------------------------------------------------
+# Session rescan
+# ---------------------------------------------------------------------------
+
+=head2 rescan($target_iqn)
+
+Rescans the iSCSI session for C<$target_iqn> to refresh LUN geometry in the
+kernel.  Must be called after the storage side has resized a LUN while the
+session is active (e.g. after a C<volume_resize> on a running VM), so that
+the kernel block device reports the updated capacity before callers query it.
+
+Returns 1 on success, 0 if the session is not active (no-op, not an error).
+
+=cut
+
+sub rescan {
+    my ($self, $target_iqn) = @_;
+    croak "rescan: target_iqn is required"
+        unless defined $target_iqn && length $target_iqn;
+
+    return 0 unless $self->is_logged_in($target_iqn);
+
+    $self->{logger}->(info => "ISCSIManager: rescan session for $target_iqn");
+
+    eval {
+        $self->_run('iscsiadm', '-m', 'node',
+            '--targetname', $target_iqn,
+            '--portal',     $self->{portal},
+            '--rescan');
+    };
+    if ($@) {
+        $self->{logger}->(warning =>
+            "ISCSIManager: rescan warning for '$target_iqn': $@");
+        return 0;
+    }
+    return 1;
+}
+
 1;
