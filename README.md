@@ -10,9 +10,9 @@ storage backend for virtual machines and containers.
 
 | Component | State |
 |---|---|
-| `QuantaStor/APIClient.pm` | Complete — clean REST client, 44 unit tests |
-| `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 37 unit tests |
-| `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 46 unit tests |
+| `QuantaStor/APIClient.pm` | Complete — clean REST client, 45 unit tests |
+| `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 42 unit tests |
+| `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 55 unit tests |
 | Debian packaging | Complete — `pve-storage-quantastor_0.2.0-1_all.deb` |
 
 ---
@@ -67,17 +67,20 @@ PVE volume names follow the standard Proxmox convention:
 ```
 pve-quantastor-plugin/
 ├── src/
-│   └── perl5/PVE/Storage/
-│       ├── Custom/
-│       │   └── QuantaStor.pm         PVE custom plugin — registers type 'quantastor'
-│       └── QuantaStor/
-│           ├── APIClient.pm          REST client for QuantaStor API
-│           └── ISCSIManager.pm       iSCSI initiator lifecycle management
+│   └── perl5/PVE/
+│       ├── API2/Storage/
+│       │   └── QuantaStorScan.pm     Pool-scan PVE API endpoint (injected into Scan.pm)
+│       └── Storage/
+│           ├── Custom/
+│           │   └── QuantaStor.pm     PVE custom plugin — registers type 'quantastor'
+│           └── QuantaStor/
+│               ├── APIClient.pm      REST client for QuantaStor API
+│               └── ISCSIManager.pm   iSCSI initiator lifecycle management
 ├── t/
-│   ├── 01-api-client.t               Unit tests — APIClient (44 tests)
-│   ├── 02-iscsi-manager.t            Unit tests — ISCSIManager (37 tests)
+│   ├── 01-api-client.t               Unit tests — APIClient (45 tests)
+│   ├── 02-iscsi-manager.t            Unit tests — ISCSIManager (42 tests)
 │   ├── 03-integration.t              Integration tests (requires live appliance)
-│   ├── 04-plugin.t                   Unit tests — QuantaStorPlugin (46 tests)
+│   ├── 04-plugin.t                   Unit tests — QuantaStorPlugin (55 tests)
 │   ├── run_tests.sh                  Test runner script
 │   └── lib/Test/QuantaStor/
 │       ├── MockUA.pm                 Mock LWP::UserAgent for APIClient tests
@@ -103,8 +106,10 @@ dpkg -i pve-storage-quantastor_0.2.0-1_all.deb
 ```
 
 The `quantastor` storage type will appear in the PVE UI immediately after the browser
-is refreshed. The package includes a dpkg trigger that automatically re-injects the
-UI script tag if `pve-manager` is upgraded — no manual reinstall required.
+is refreshed. The package includes two dpkg file triggers: one on `index.html.tpl`
+(re-injects the UI script tag when `pve-manager` is upgraded) and one on
+`PVE/API2/Storage/Scan.pm` (re-injects the pool-scan API route when `pve-storage` is
+upgraded). No manual reinstall is required after either upgrade.
 
 ### Manual install (no package)
 
@@ -116,6 +121,11 @@ systemctl enable --now iscsid
 mkdir -p /usr/share/perl5/PVE/Storage/Custom
 cp src/perl5/PVE/Storage/Custom/QuantaStor.pm  /usr/share/perl5/PVE/Storage/Custom/
 cp -r src/perl5/PVE/Storage/QuantaStor/        /usr/share/perl5/PVE/Storage/
+
+# Install pool-scan API endpoint
+mkdir -p /usr/share/perl5/PVE/API2/Storage
+cp src/perl5/PVE/API2/Storage/QuantaStorScan.pm /usr/share/perl5/PVE/API2/Storage/
+echo 'require PVE::API2::Storage::QuantaStorScan;' >> /usr/share/perl5/PVE/API2/Storage/Scan.pm
 
 # Inject the web UI panel
 cp www/quantastor-storage.js /usr/share/pve-manager/js/
@@ -164,18 +174,18 @@ Go to **Datacenter → Storage → Add → QuantaStor**.
 
 | Field | Tab | Description |
 |---|---|---|
-| ID | General | Unique storage name within the PVE cluster |
+| ID | General | Auto-fills with the first available `qs-storage-N`; edit as needed |
 | API Host | General | QuantaStor appliance IP or hostname |
 | Username | General | QuantaStor API user (typically `admin`) |
 | Password | General | API password — stored securely, never written to `storage.cfg` |
-| Pool | General | Storage pool name or UUID on the QuantaStor appliance |
-| Content | General | Storage content type — select `Disk image` for VM disks |
+| Pool | General | Storage pool name on the QuantaStor appliance. Click the scan button (🔍) to connect to the appliance and populate a dropdown of available pools. |
+| Content | General | Fixed to `Disk image` — the only supported content type in this release |
 | Nodes | General | Restrict to specific PVE nodes (leave empty for all nodes) |
 | iSCSI Portal | Advanced | Portal address for iSCSI login — defaults to API Host if left blank |
 | SSL Verify | Advanced | Enable SSL certificate verification — leave off for self-signed certs |
 
-`API Host`, `Username`, and `Pool` are fixed after creation. All other
-fields can be edited later via the UI.
+`API Host`, `Username`, and `Pool` are fixed after creation. `Content` is always
+`Disk image` and cannot be changed. All other fields can be edited later via the UI.
 
 ### CLI
 
@@ -308,22 +318,31 @@ cannot reach `api_host:8153` — check firewall/routing, not the plugin.
 
 ### A `qm move-disk` or VM migration to another cluster node fails
 
-Most often: the destination node cannot load the plugin (wrong PVE/plugin
-version combination) or is missing the `.pw` file. Check on the destination:
+**First, verify the plugin is loaded on the destination:**
 
 ```bash
-pvesm status --storage <storeid>
+# On the destination node
+pvesm status
 ls -la /etc/pve/priv/storage/<storeid>.pw
-journalctl -u pvedaemon --since '5 min ago' | grep QuantaStor
+journalctl -u pvedaemon --since '5 min ago' | grep -i quantastor
 ```
 
-If migration fails with `storage type 'quantastor' not supported`, the
-storage entry is missing `shared 1`. Plugin builds ≥ 0.2.0 post-2026-05-26
-default this on new storage adds; for storage created on an earlier build,
-backfill once:
-```bash
-pvesm set <storeid> -shared 1
-```
+Common causes:
+
+- **Plugin not installed on destination** — install the `.deb` on every cluster
+  node and restart `pvedaemon pveproxy pvestatd`.
+- **Missing `.pw` file** — the file lives in `/etc/pve/priv/` (pmxcfs), which
+  replicates automatically. If a node is offline when the storage is added it
+  may miss the file; backfill with `pvesm set <storeid> --password <pass>` from
+  any node.
+- **QEMU version skew** — if the source node runs a newer QEMU the default
+  machine type (e.g. `pc-q35-11.0`) may be too new for the destination. Pin
+  the VM's machine type: `qm set <vmid> --machine pc-q35-10.1` (or whichever
+  version matches the older node). Check with `qemu-system-x86_64 --version`
+  on both nodes.
+- **Storage `shared` flag not set** — PVE's migration scanner classifies the
+  storage as local if `shared=0` and blocks migration. Run
+  `pvesm set <storeid> --shared 1` or re-add the storage via the UI.
 
 ---
 
@@ -396,13 +415,14 @@ my $client = PVE::Storage::QuantaStor::APIClient->new(
 
 | Method | Description |
 |---|---|
+| `pool_enum()` | All storage pool objects on the appliance |
 | `pool_get($pool_id)` | Pool metadata (size, freeSpace) |
 | `volume_enum()` | All volumes on the appliance |
 | `volume_get($name_or_uuid)` | Single volume object; dies if not found |
 | `volume_get_or_undef($name_or_uuid)` | Like `volume_get` but returns `undef` if not found (safe for idempotent delete) |
 | `volume_create($name, $size_kb, $pool_id)` | Create a new volume |
 | `volume_delete($vol_uuid)` | Delete volume (safe defaults; callers pass explicit flags for cascade/force) |
-| `volume_resize($vol_id, $pool_id, $new_size_bytes)` | Grow a volume to `$new_size_bytes` (`storageVolumeResize`) — shrinking is not supported by QuantaStor |
+| `volume_resize($vol_id, $pool_id, $new_size_bytes)` | Grow a volume to `$new_size_bytes` (flags=2 allows resize while iSCSI session is active — no logout required; caller should rescan after to update kernel LUN geometry) |
 | `volume_modify($vol_uuid, $new_name)` | Rename a volume |
 | `volume_snapshot($vol_name, $snap_name)` | Take a snapshot |
 | `volume_rollback($vol_uuid, $snap_name)` | Roll back to snapshot |
@@ -441,9 +461,34 @@ my $iscsi = PVE::Storage::QuantaStor::ISCSIManager->new(
 | `device_path($target_iqn, $lun)` | Returns `/dev/disk/by-path/ip-...-iscsi-...-lun-N` (honors configured portal port) |
 | `wait_for_logout($target_iqn, $max_wait)` | Poll until session gone or timeout; caller must invoke `logout()` first |
 | `wait_for_device($target_iqn, $lun, $max_wait)` | Poll the by-path symlink until present, default 30s timeout |
+| `rescan($target_iqn)` | Re-read LUN capacity from target after an online resize so the kernel block device reports the new size before QEMU's `block_resize` QMP fires. No-op when not logged in. |
 
 Device paths use `/dev/disk/by-path/` for stability across reboots, unlike ephemeral
 `/dev/sdX` assignments.
+
+---
+
+### `PVE::API2::Storage::QuantaStorScan`
+
+Thin server-side proxy that exposes a QuantaStor pool list as a PVE scan
+endpoint. Installed by the package and appended to the `PVE::API2::Storage::Scan`
+routing tree via `postinst`. Registered at:
+
+```
+GET /api2/json/nodes/<node>/scan/quantastor
+```
+
+Parameters: `api_host` (required), `username` (default: `admin`), `password`
+(required), `ssl_verify` (optional, default: 0).
+
+Returns an array of `{ name, id, status }` objects for all active pools on the
+appliance. Used by the pool scan button in the Add Storage dialog.
+
+Test from the command line:
+```bash
+pvesh get /nodes/<node>/scan/quantastor \
+  --api_host <qs-ip> --username admin --password <pass>
+```
 
 ---
 
@@ -477,6 +522,17 @@ The top-level PVE storage plugin. Inherits from `PVE::Storage::Plugin` and wires
 ---
 
 ## Known Limitations
+
+### Cluster compatibility
+
+Live migration, offline migration, resize on running VMs, snapshot/rollback,
+template/clone, and VM destroy have all been validated on a two-node PVE 9.2
+cluster sharing a common QuantaStor portal (verified 2026-05-29).
+
+One minor quirk: `qm template` (`create_base`) re-logins to the renamed
+`base-*` volume after the operation, leaving an active iSCSI session on the
+coordinator node. PVE cleans this up automatically before any subsequent volume
+operation. It has no practical impact on cluster operations.
 
 ### iSCSI LUN field
 
@@ -583,25 +639,41 @@ affected nodes or downgrade the plugin.
 
 ### ~~Phase 3 — `QuantaStorPlugin.pm`~~ ✅ Complete
 
-All PVE storage hooks implemented and unit tested (46 tests). Full VM lifecycle validated
-on live PVE 9.1.1 + QuantaStor: create → snapshot → rollback → template → clone.
+All PVE storage hooks implemented and unit tested (55 tests). Full VM lifecycle validated
+on live PVE 9.1.x / 9.2.x + QuantaStor: create → snapshot → rollback → resize → template → clone. Two-node cluster migration validated.
 
 ### ~~Phase 4 — Packaging~~ ✅ Complete
 
 Debian package `pve-storage-quantastor_0.2.0-1_all.deb` builds cleanly with `dpkg-buildpackage`
 and installs successfully on PVE 9.1.1. Plugin lives in `/usr/share/perl5/PVE/Storage/Custom/`
 (PVE's auto-discovery path for third-party plugins). `postinst` restarts PVE services and
-registers a dpkg trigger so the UI panel survives future `pve-manager` upgrades automatically.
+registers dpkg triggers so the UI panel and pool-scan endpoint survive future `pve-manager`
+and `pve-storage` upgrades automatically. `prerm` warns if active storage entries exist.
+Build via `bash build-deb.sh`.
 
 ### ~~Phase 5 — UI enhancements~~ ✅ Complete
 
-The `quantastor` type is now fully integrated into the PVE web UI. `QuantaStor` appears
-in the **Datacenter → Storage → Add** dropdown with a dedicated two-column input panel
-(General + Advanced tabs). Fixed fields render as read-only when editing an existing entry.
+The `quantastor` type is fully integrated into the PVE web UI with a dedicated
+two-column input panel (General + Advanced tabs).
 
-Implementation ships a standalone JS file (`/usr/share/pve-manager/js/quantastor-storage.js`)
-injected into `index.html.tpl` by `postinst` — no `pve-manager` source patches required.
-Removed cleanly by `prerm` on uninstall.
+**Add dialog UX (v0.2):**
+- **Storage ID** auto-fills with the first available `qs-storage-N`, incrementing
+  past any names already taken in the cluster.
+- **Pool field** is a combobox with a scan trigger (🔍). Clicking it calls
+  `GET /nodes/<node>/scan/quantastor` with the credentials already entered,
+  contacts the QuantaStor appliance, and populates a dropdown of active pools.
+  The field remains editable for manual entry if the scan isn't needed.
+- **Content type** is locked to `Disk image` — the selector shows only the
+  supported type so users can't accidentally select Container or Backup.
+
+**Deployment:**
+- JS ships as `/usr/share/pve-manager/js/quantastor-storage.js`, injected into
+  `index.html.tpl` by `postinst`. A dpkg file trigger re-injects after
+  `pve-manager` upgrades.
+- Pool scan endpoint ships as `PVE::API2::Storage::QuantaStorScan`, appended to
+  `PVE::API2::Storage::Scan` by `postinst`. A dpkg file trigger re-injects after
+  `pve-storage` upgrades.
+- Both injections are removed cleanly by `prerm` on uninstall.
 
 ### Phase 6 — Migration tooling
 
@@ -641,7 +713,7 @@ Extend the plugin to support LXC container root filesystems in addition to VM di
 ./t/run_tests.sh
 ```
 
-All 127 unit tests must pass with no warnings. New functionality should include corresponding
+All 142 unit tests must pass with no warnings. New functionality should include corresponding
 tests in the relevant test file (`t/01-api-client.t`, `t/02-iscsi-manager.t`, or `t/04-plugin.t`).
 
 ### Adding a new QuantaStor API method

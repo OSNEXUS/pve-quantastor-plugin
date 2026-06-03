@@ -178,6 +178,17 @@ sub pool_get {
     return $self->_get('storagePoolGet', storagePool => $pool_id);
 }
 
+=head2 pool_enum()
+
+Returns an arrayref of all storage pool objects visible on this appliance.
+
+=cut
+
+sub pool_enum {
+    my ($self) = @_;
+    return $self->_get('storagePoolEnum');
+}
+
 # ---------------------------------------------------------------------------
 # Volume operations
 # ---------------------------------------------------------------------------

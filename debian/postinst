@@ -4,18 +4,23 @@ set -e
 TPLFILE=/usr/share/pve-manager/index.html.tpl
 SCRIPTTAG='    <script type="text/javascript" src="/pve2/js/quantastor-storage.js"></script>'
 
+SCANFILE=/usr/share/perl5/PVE/API2/Storage/Scan.pm
+SCANREQ='require PVE::API2::Storage::QuantaStorScan;'
+
 inject_script_tag() {
     if [ -f "$TPLFILE" ] && ! grep -qF 'quantastor-storage.js' "$TPLFILE"; then
-        # Insert our <script> tag on the line after pvemanagerlib.js loads,
-        # so PVE.Utils.storageSchema exists before we extend it.
         sed -i '/pvemanagerlib\.js/a\'"$SCRIPTTAG" "$TPLFILE"
+    fi
+}
+
+inject_scan_require() {
+    if [ -f "$SCANFILE" ] && ! grep -qF 'QuantaStorScan' "$SCANFILE"; then
+        echo "$SCANREQ" >> "$SCANFILE"
     fi
 }
 
 case "$1" in
     configure)
-        # Ensure the iSCSI initiator daemon is enabled and running.
-        # open-iscsi may be installed but iscsid inactive on a fresh node.
         if systemctl list-unit-files iscsid.service >/dev/null 2>&1; then
             systemctl enable iscsid 2>/dev/null || true
             if ! systemctl is-active --quiet iscsid 2>/dev/null; then
@@ -23,13 +28,9 @@ case "$1" in
             fi
         fi
 
-        # Inject UI script tag into the PVE web UI HTML template.
         inject_script_tag
+        inject_scan_require
 
-        # Restart PVE services so the new storage type is registered.
-        # pve-cluster intentionally NOT in this list — Custom plugins are
-        # auto-discovered by pvedaemon; restarting pve-cluster would touch
-        # the cluster config FS for no benefit and high blast radius.
         for svc in pvedaemon pveproxy pvestatd; do
             if systemctl is-active --quiet "$svc" 2>/dev/null; then
                 systemctl restart "$svc" || true
@@ -38,18 +39,29 @@ case "$1" in
         ;;
 
     triggered)
-        # Fired automatically when pve-manager is upgraded (declared in
-        # debian/triggers). pve-manager overwrites index.html.tpl on every
-        # upgrade, removing our <script> tag — re-inject it here so the
-        # QuantaStor UI panel survives pve-manager updates without any
-        # manual reinstall.
-        inject_script_tag
-
-        # Only pveproxy needs a restart — it renders the template on each
-        # request so the updated file takes effect immediately after restart.
-        if systemctl is-active --quiet pveproxy 2>/dev/null; then
-            systemctl restart pveproxy || true
-        fi
+        # $2 tells us which file trigger fired.
+        case "$2" in
+            /usr/share/pve-manager/index.html.tpl)
+                inject_script_tag
+                if systemctl is-active --quiet pveproxy 2>/dev/null; then
+                    systemctl restart pveproxy || true
+                fi
+                ;;
+            /usr/share/perl5/PVE/API2/Storage/Scan.pm)
+                inject_scan_require
+                if systemctl is-active --quiet pvedaemon 2>/dev/null; then
+                    systemctl restart pvedaemon || true
+                fi
+                ;;
+            *)
+                # Re-inject both on any other trigger (belt-and-suspenders).
+                inject_script_tag
+                inject_scan_require
+                if systemctl is-active --quiet pveproxy 2>/dev/null; then
+                    systemctl restart pveproxy || true
+                fi
+                ;;
+        esac
         ;;
 esac
 

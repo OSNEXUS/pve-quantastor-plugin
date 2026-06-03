@@ -20,6 +20,12 @@ case "$1" in
 
         # Remove UI script tag from the PVE web UI HTML template.
         remove_script_tag
+
+        # Remove the QuantaStorScan require line from Scan.pm.
+        SCANFILE=/usr/share/perl5/PVE/API2/Storage/Scan.pm
+        if [ -f "$SCANFILE" ]; then
+            sed -i '/QuantaStorScan/d' "$SCANFILE"
+        fi
         ;;
 esac
 

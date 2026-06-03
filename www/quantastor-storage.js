@@ -21,12 +21,10 @@ Ext.define('PVE.storage.QuantaStorInputPanel', {
     onGetValues: function(values) {
 	let me = this;
 
-	// Don't submit password if left blank or unchanged on edit.
 	if (!values.password || values.password === '********') {
 	    delete values.password;
 	}
 
-	// Don't submit portal if left blank (Perl side defaults it to api_host).
 	if (values.portal === '') {
 	    delete values.portal;
 	    if (!me.isCreate) {
@@ -37,11 +35,92 @@ Ext.define('PVE.storage.QuantaStorInputPanel', {
 	return me.callParent([values]);
     },
 
-    initComponent: function() {
+    // Auto-fill the storage ID field with the first available qs-storage-N.
+    autoFillStorageId: function() {
+	let me = this;
+	if (!me.isCreate) return;
+
+	Proxmox.Utils.API2Request({
+	    url: '/storage',
+	    method: 'GET',
+	    failure: function() { /* silently skip if storage list unavailable */ },
+	    success: function(response) {
+		let existing = {};
+		(response.result.data || []).forEach(function(s) {
+		    existing[s.storage] = true;
+		});
+
+		let n = 1;
+		while (existing['qs-storage-' + n]) n++;
+		let suggestedId = 'qs-storage-' + n;
+
+		let idField = me.down('field[name=storage]');
+		if (idField && !idField.getValue()) {
+		    idField.setValue(suggestedId);
+		}
+	    },
+	});
+    },
+
+    // Scan the QuantaStor appliance and populate the pool dropdown.
+    scanPools: function() {
 	let me = this;
 
-	// StorageBase.initComponent() prepends the storage ID field to column1
-	// and prepends Nodes + Enable to column2 automatically.
+	let apiHost  = me.down('field[name=api_host]').getValue();
+	let username = me.down('field[name=username]').getValue() || 'admin';
+	let password = me.down('field[name=password]').getValue();
+	let sslVerify = me.down('field[name=ssl_verify]').getValue() ? 1 : 0;
+	let poolCombo = me.down('combobox[name=pool_id]');
+
+	if (!apiHost) {
+	    Ext.Msg.alert(gettext('Error'), gettext('Enter API Host before scanning.'));
+	    return;
+	}
+	if (!password) {
+	    Ext.Msg.alert(gettext('Error'), gettext('Enter Password before scanning.'));
+	    return;
+	}
+
+	poolCombo.setLoading(true);
+
+	let node = Proxmox.NodeName || 'localhost';
+
+	Proxmox.Utils.API2Request({
+	    url: '/nodes/' + node + '/scan/quantastor',
+	    method: 'GET',
+	    params: {
+		api_host:   apiHost,
+		username:   username,
+		password:   password,
+		ssl_verify: sslVerify,
+	    },
+	    failure: function(response) {
+		poolCombo.setLoading(false);
+		let msg = response.htmlStatus || gettext('Scan failed. Check API Host and credentials.');
+		Ext.Msg.alert(gettext('Scan Failed'), msg);
+	    },
+	    success: function(response) {
+		poolCombo.setLoading(false);
+		let pools = response.result.data || [];
+		if (!pools.length) {
+		    Ext.Msg.alert(gettext('No Pools Found'),
+			gettext('Connected to QuantaStor but no active pools were found.'));
+		    return;
+		}
+		let store = poolCombo.getStore();
+		store.loadData(pools.map(function(p) {
+		    return { name: p.name, id: p.id, status: p.status };
+		}));
+		// Pre-select if only one pool.
+		if (pools.length === 1) {
+		    poolCombo.setValue(pools[0].name);
+		}
+	    },
+	});
+    },
+
+    initComponent: function() {
+	let me = this;
 
 	me.column1 = [
 	    {
@@ -67,11 +146,30 @@ Ext.define('PVE.storage.QuantaStorInputPanel', {
 		allowBlank: !me.isCreate,
 	    },
 	    {
-		xtype: me.isCreate ? 'textfield' : 'displayfield',
+		// Pool field: combobox with Scan trigger on create; displayfield on edit.
+		xtype: me.isCreate ? 'combobox' : 'displayfield',
 		name: 'pool_id',
-		value: '',
 		fieldLabel: gettext('Pool'),
 		allowBlank: false,
+		editable: true,
+		forceSelection: false,
+		valueField: 'name',
+		displayField: 'name',
+		queryMode: 'local',
+		store: {
+		    fields: ['name', 'id', 'status'],
+		    data: [],
+		},
+		emptyText: me.isCreate ? gettext('Enter pool name or click Scan') : '',
+		triggers: me.isCreate ? {
+		    scan: {
+			cls: 'x-form-search-trigger',
+			tooltip: gettext('Scan QuantaStor for pools'),
+			handler: function() {
+			    me.scanPools();
+			},
+		    },
+		} : undefined,
 	    },
 	];
 
@@ -80,7 +178,7 @@ Ext.define('PVE.storage.QuantaStorInputPanel', {
 		xtype: 'pveContentTypeSelector',
 		name: 'content',
 		value: 'images',
-		multiSelect: true,
+		cts: ['images'],
 		fieldLabel: gettext('Content'),
 		allowBlank: false,
 	    },
@@ -108,5 +206,9 @@ Ext.define('PVE.storage.QuantaStorInputPanel', {
 	];
 
 	me.callParent();
+
+	if (me.isCreate) {
+	    me.autoFillStorageId();
+	}
     },
 });

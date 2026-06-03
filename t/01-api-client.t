@@ -10,6 +10,8 @@ use lib "$Bin/../src/perl5";
 use lib "$Bin/lib";
 
 use Test::More;
+use JSON::PP ();
+my $true = JSON::PP::true();
 use Test::QuantaStor::MockUA;
 use PVE::Storage::QuantaStor::APIClient;
 
@@ -137,6 +139,17 @@ subtest 'pool_get dies on HTTP error' => sub {
     );
     eval { $client->pool_get('pool-uuid') };
     like $@, qr/failed.*500/i, 'dies with HTTP error message';
+};
+
+subtest 'pool_enum returns array' => sub {
+    my ($client) = make_client(storagePoolEnum => [
+        { name => 'pool-1', id => 'uuid-1', status => 'ONLINE', isActive => $true},
+        { name => 'pool-2', id => 'uuid-2', status => 'ONLINE', isActive => $true},
+    ]);
+    my $result = $client->pool_enum();
+    is ref($result), 'ARRAY', 'returns arrayref';
+    is scalar @$result, 2, 'two pools returned';
+    is $result->[0]{name}, 'pool-1', 'first pool name';
 };
 
 # ---------------------------------------------------------------------------
