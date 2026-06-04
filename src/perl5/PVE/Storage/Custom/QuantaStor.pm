@@ -571,7 +571,11 @@ sub deactivate_volume {
     my $client = _client($scfg, $storeid);
     my $iscsi  = _iscsi($scfg, $storeid);
 
-    my $vol  = $client->volume_get($name);
+    # Use get_or_undef: a concurrent free_image on another cluster node may have
+    # already deleted the volume by the time deactivate runs on this node.
+    my $vol = $client->volume_get_or_undef($name);
+    return 1 unless $vol;
+
     my $iqn  = $iscsi->get_initiator_iqn();
     my $host = $client->host_get($iqn);
 
@@ -681,7 +685,10 @@ sub volume_resize {
     # (stopped) would then see the stale size. rescan is a no-op when no
     # session is active.
     my $iscsi = _iscsi($scfg, $storeid);
-    $iscsi->rescan($vol->{iqn});
+    unless ($iscsi->rescan($vol->{iqn})) {
+        warn "volume_resize: rescan failed for '$name' — "
+           . "kernel LUN geometry may be stale; QEMU block_resize may fail\n";
+    }
 
     return $size;
 }
@@ -754,8 +761,9 @@ sub volume_rollback_is_possible {
         or die "can't rollback — snapshot '$snap' has no timestamp\n";
 
     # Enumerate all volumes and find any snapshots of the same parent that
-    # are newer than our target snapshot.
-    my $all = $client->volume_enum();
+    # are newer than our target snapshot. Wrap in eval — a transient API error
+    # here must not propagate as an uncaught exception to the PVE UI caller.
+    my $all = eval { $client->volume_enum() } // [];
     my $blocked = 0;
 
     for my $item (@$all) {
@@ -853,11 +861,11 @@ sub create_base {
     # mutating the volume — rename rejects on an active session.
     $client->wait_for_session_gone($name);
 
-    # Rename to base- convention.
-    my $renamed = $client->volume_modify($vol->{id}, $newname);
-    my $new_iqn = ref $renamed eq 'HASH' && $renamed->{iqn}
-        ? $renamed->{iqn}
-        : $client->volume_get($newname)->{iqn};
+    # Rename to base- convention. Re-fetch after rename to get the canonical IQN
+    # rather than relying on volume_modify's return shape, which varies across
+    # QS versions (bare object vs task-wrapper vs iqn absent).
+    $client->volume_modify($vol->{id}, $newname);
+    my $new_iqn = $client->volume_get($newname)->{iqn};
 
     # Re-grant access and bring online.
     $client->volume_acl_add($vol->{id}, $iqn);

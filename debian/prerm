@@ -22,9 +22,10 @@ case "$1" in
         remove_script_tag
 
         # Remove the QuantaStorScan require line from Scan.pm.
+        # Use the full literal string to avoid accidentally matching unrelated lines.
         SCANFILE=/usr/share/perl5/PVE/API2/Storage/Scan.pm
         if [ -f "$SCANFILE" ]; then
-            sed -i '/QuantaStorScan/d' "$SCANFILE"
+            sed -i '/require PVE::API2::Storage::QuantaStorScan;/d' "$SCANFILE"
         fi
         ;;
 esac

@@ -186,7 +186,11 @@ Returns an arrayref of all storage pool objects visible on this appliance.
 
 sub pool_enum {
     my ($self) = @_;
-    return $self->_get('storagePoolEnum');
+    my $result = $self->_get('storagePoolEnum');
+    # Normalize: single-pool appliances may return a bare hash instead of a
+    # one-element array. Callers always iterate the result.
+    $result = [$result] if ref $result eq 'HASH';
+    return $result // [];
 }
 
 # ---------------------------------------------------------------------------
@@ -201,7 +205,9 @@ Returns an arrayref of all volume objects visible on this appliance.
 
 sub volume_enum {
     my ($self) = @_;
-    return $self->_get('storageVolumeEnum');
+    my $result = $self->_get('storageVolumeEnum');
+    $result = [$result] if ref $result eq 'HASH';
+    return $result // [];
 }
 
 =head2 volume_get($name_or_uuid)

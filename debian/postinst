@@ -14,7 +14,12 @@ inject_script_tag() {
 }
 
 inject_scan_require() {
-    if [ -f "$SCANFILE" ] && ! grep -qF 'QuantaStorScan' "$SCANFILE"; then
+    if [ ! -f "$SCANFILE" ]; then
+        echo "pve-storage-quantastor: $SCANFILE not found — pool-scan endpoint not registered." \
+             "It will be injected automatically when pve-storage is installed." >&2
+        return 0
+    fi
+    if ! grep -qF 'QuantaStorScan' "$SCANFILE"; then
         echo "$SCANREQ" >> "$SCANFILE"
     fi
 }
