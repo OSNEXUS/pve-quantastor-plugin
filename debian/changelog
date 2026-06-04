@@ -1,11 +1,21 @@
 pve-storage-quantastor (0.2.0-1) unstable; urgency=medium
 
-  * Alpha release v0.2.0.
-  * Registers PVE storage type 'quantastor' — no PVE core file patching required.
-  * PVE::Storage::QuantaStor::APIClient: OO REST client for QuantaStor API.
-  * PVE::Storage::QuantaStor::ISCSIManager: iSCSI initiator lifecycle management.
-  * PVE::Storage::QuantaStorPlugin: full PVE storage plugin implementation
-    covering all hooks: activate, status, list, alloc, free, path, resize,
+  * v0.2.0 — first-class PVE storage type 'quantastor' (no PVE core patching).
+  * PVE::Storage::QuantaStor::APIClient: OO REST client for the QuantaStor API.
+  * PVE::Storage::QuantaStor::ISCSIManager: iSCSI initiator lifecycle
+    management (login/logout/discovery/rescan).
+  * PVE::Storage::Custom::QuantaStor: full storage plugin covering all hooks —
+    activate, status, list, alloc, free, path, online resize (flags=2),
     snapshot, rollback, clone, and template creation.
+  * PVE::API2::Storage::QuantaStorScan: pool-scan API endpoint
+    (GET /nodes/<node>/scan/quantastor), injected into Scan.pm by postinst.
+  * Web UI dialog: storage-ID auto-fill (qs-storage-N), pool scan dropdown,
+    content type locked to 'Disk image'.
+  * Password stored in /etc/pve/priv/storage/<id>.pw (pmxcfs-replicated),
+    never written to storage.cfg.
+  * dpkg file triggers re-inject the UI script tag and scan endpoint after
+    pve-manager / pve-storage upgrades.
+  * Validated on PVE 9.1.x and 9.2.x, including two-node cluster live
+    migration. Loads on both (api=13).
 
- -- OSNexus <support@osnexus.com>  Thu, 26 Mar 2026 00:00:00 +0000
+ -- OSNexus <support@osnexus.com>  Thu, 04 Jun 2026 21:59:09 +0000
