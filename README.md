@@ -10,7 +10,7 @@ storage backend for virtual machines and containers.
 
 | Component | State |
 |---|---|
-| `QuantaStor/APIClient.pm` | Complete — clean REST client, 45 unit tests |
+| `QuantaStor/APIClient.pm` | Complete — clean REST client, 46 unit tests |
 | `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 42 unit tests |
 | `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 55 unit tests |
 | Debian packaging | Complete — `pve-storage-quantastor_0.2.0-1_all.deb` |
@@ -77,7 +77,7 @@ pve-quantastor-plugin/
 │               ├── APIClient.pm      REST client for QuantaStor API
 │               └── ISCSIManager.pm   iSCSI initiator lifecycle management
 ├── t/
-│   ├── 01-api-client.t               Unit tests — APIClient (45 tests)
+│   ├── 01-api-client.t               Unit tests — APIClient (46 tests)
 │   ├── 02-iscsi-manager.t            Unit tests — ISCSIManager (42 tests)
 │   ├── 03-integration.t              Integration tests (requires live appliance)
 │   ├── 04-plugin.t                   Unit tests — QuantaStorPlugin (55 tests)
@@ -713,7 +713,7 @@ Extend the plugin to support LXC container root filesystems in addition to VM di
 ./t/run_tests.sh
 ```
 
-All 142 unit tests must pass with no warnings. New functionality should include corresponding
+All 143 unit tests must pass with no warnings. New functionality should include corresponding
 tests in the relevant test file (`t/01-api-client.t`, `t/02-iscsi-manager.t`, or `t/04-plugin.t`).
 
 ### Adding a new QuantaStor API method
