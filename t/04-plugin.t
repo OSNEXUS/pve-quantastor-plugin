@@ -192,8 +192,8 @@ subtest '_client dies with actionable error when password is missing on local no
     # In a PVE cluster, /etc/pve/priv/storage/ is pmxcfs-replicated but a node
     # can end up without the file (sync hiccup, manual cleanup, storage added
     # before the node joined). Without this check, every API call returns a
-    # misleading QuantaStor err=26 "authentication check failed" — the customer
-    # bug we keep getting. The plugin must surface the actual cause.
+    # misleading QuantaStor err=26 "authentication check failed" — a common
+    # support pitfall. The plugin must surface the actual cause.
 
     no warnings 'redefine';
     local *PVE::Storage::Custom::QuantaStor::_get_password = sub { undef };
