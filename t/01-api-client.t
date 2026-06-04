@@ -245,6 +245,26 @@ subtest 'volume_get falls back to pool-scoped enum on multiple matches' => sub {
     is $vol->{id}, 'vol-in-pool-1', 'returns volume from correct pool';
 };
 
+subtest 'volume_get_or_undef returns undef when name collides across pools but is absent from ours' => sub {
+    # storageVolumeGet says "multiple matches" (name exists elsewhere), but the
+    # pool-scoped enum finds no match in OUR pool. The idempotent delete path
+    # must treat this as not-found, not hard-die.
+    my $ua = Test::QuantaStor::MockUA->new(responses => {
+        storageVolumeGet  => { RestError => 'multiple matches found for specified query' },
+        storagePoolGet    => { id => 'pool-uuid-1' },
+        storageVolumeEnum => [
+            { id => 'vol-in-pool-2', name => 'vm-100-disk-0', storagePoolId => 'pool-uuid-2' },
+        ],
+    });
+    my $client = PVE::Storage::QuantaStor::APIClient->new(
+        host => '10.0.0.1', username => 'admin', password => 'secret',
+        pool_id => 'pool-uuid-1',
+        _ua => $ua,
+    );
+    my $vol = $client->volume_get_or_undef('vm-100-disk-0');
+    is $vol, undef, 'returns undef (not a die) for cross-pool absent volume';
+};
+
 # ---------------------------------------------------------------------------
 # 5. volume_create
 # ---------------------------------------------------------------------------

@@ -81,6 +81,13 @@ Ext.define('PVE.storage.QuantaStorInputPanel', {
 	    return;
 	}
 
+	// Guard against overlapping scans (e.g. rapid double-click): a second
+	// in-flight request can race the first's loadData/setValue and leave the
+	// combo referencing a dropped record.
+	if (me.scanInFlight) {
+	    return;
+	}
+	me.scanInFlight = true;
 	poolCombo.setLoading(true);
 
 	let node = Proxmox.NodeName || 'localhost';
@@ -95,11 +102,13 @@ Ext.define('PVE.storage.QuantaStorInputPanel', {
 		ssl_verify: sslVerify,
 	    },
 	    failure: function(response) {
+		me.scanInFlight = false;
 		poolCombo.setLoading(false);
 		let msg = response.htmlStatus || gettext('Scan failed. Check API Host and credentials.');
 		Ext.Msg.alert(gettext('Scan Failed'), msg);
 	    },
 	    success: function(response) {
+		me.scanInFlight = false;
 		poolCombo.setLoading(false);
 		let pools = response.result.data || [];
 		if (!pools.length) {

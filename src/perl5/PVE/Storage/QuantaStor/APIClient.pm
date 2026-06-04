@@ -271,7 +271,11 @@ sub _volume_get_by_pool_name {
         ($_->{storagePoolId} // '') eq $pool_uuid
     } @$vols;
 
-    croak "volume_get: no volume '$name' found in pool $pool_uuid"
+    # Phrase as a not-found error ("could not be found") so volume_get_or_undef's
+    # matcher recognizes it — otherwise the idempotent delete paths (free_image,
+    # volume_snapshot_delete) would hard-die when a name exists in another pool
+    # but is absent from ours.
+    croak "volume_get: volume '$name' could not be found in pool $pool_uuid [err=5]"
         unless @matches;
 
     return $matches[0];

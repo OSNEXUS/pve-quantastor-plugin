@@ -448,6 +448,11 @@ sub path {
     my $vol = _client($scfg, $storeid)->volume_get_or_undef($name);
     return (undef, $vmid, $vtype) unless $vol;
 
+    # A volume can exist without an iSCSI target (e.g. export not yet
+    # provisioned). Return undef path rather than letting device_path croak
+    # with a cryptic "target_iqn is required" — same contract as a missing vol.
+    return (undef, $vmid, $vtype) unless defined $vol->{iqn} && length $vol->{iqn};
+
     my $iscsi = _iscsi($scfg, $storeid);
 
     # QuantaStor presents each volume as a dedicated iSCSI target at LUN 0
@@ -538,6 +543,10 @@ sub activate_volume {
 
     my $vol = $client->volume_get($name);
     my $iqn = $iscsi->get_initiator_iqn();
+
+    die "QuantaStor activate_volume: volume '$name' has no iSCSI target "
+      . "(iqn) — the LUN may not be exported yet on the appliance\n"
+        unless defined $vol->{iqn} && length $vol->{iqn};
 
     # Grant access then login — order matters.
     $client->volume_acl_add($vol->{id}, $iqn);
@@ -809,8 +818,14 @@ sub volume_snapshot_rollback {
 
     # PVE-side logout returns before QuantaStor's server-side session tracker
     # GCs the connection. Volume rollback rejects on an active QS session, so
-    # poll QS until it agrees the target is idle.
-    $client->wait_for_session_gone($name);
+    # poll QS until it agrees the target is idle. If it never clears (e.g.
+    # another cluster node still holds a session on this shared volume), fail
+    # with an actionable message instead of letting QS reject with [err=76].
+    unless ($client->wait_for_session_gone($name)) {
+        die "QuantaStor rollback: volume '$name' still has an active session "
+          . "after waiting — another node may have it open. Ensure the VM is "
+          . "stopped on all nodes and retry.\n";
+    }
 
     $client->volume_rollback($vol->{id}, $snap_name);
 
@@ -858,8 +873,15 @@ sub create_base {
     $client->volume_acl_remove($vol->{id}, $host->{id}) if $host;
 
     # Wait for QuantaStor to GC its server-side view of the session before
-    # mutating the volume — rename rejects on an active session.
-    $client->wait_for_session_gone($name);
+    # mutating the volume — rename rejects on an active session. If it never
+    # clears (another node may still hold the volume), fail with an actionable
+    # message rather than proceeding into a rename that QS rejects with [err=76]
+    # and leaving the volume half-converted.
+    unless ($client->wait_for_session_gone($name)) {
+        die "QuantaStor create_base: volume '$name' still has an active session "
+          . "after waiting — another node may have it open. Ensure the VM is "
+          . "stopped on all nodes and retry.\n";
+    }
 
     # Rename to base- convention. Re-fetch after rename to get the canonical IQN
     # rather than relying on volume_modify's return shape, which varies across
