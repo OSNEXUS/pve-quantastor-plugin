@@ -1,0 +1,10 @@
+# Re-run postinst when pve-manager is upgraded so we can re-inject
+# the quantastor-storage.js <script> tag into index.html.tpl.
+# File trigger on index.html.tpl fires whenever pve-manager installs
+# that file (i.e. on every pve-manager upgrade).
+# interest-noawait avoids making pve-manager wait on our trigger.
+interest-noawait /usr/share/pve-manager/index.html.tpl
+
+# Re-run postinst when pve-storage is upgraded so we can re-inject
+# the QuantaStorScan require into Scan.pm.
+interest-noawait /usr/share/perl5/PVE/API2/Storage/Scan.pm

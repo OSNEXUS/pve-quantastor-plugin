@@ -1,0 +1,34 @@
+#!/bin/sh
+set -e
+
+TPLFILE=/usr/share/pve-manager/index.html.tpl
+
+remove_script_tag() {
+    if [ -f "$TPLFILE" ]; then
+        sed -i '/quantastor-storage\.js/d' "$TPLFILE"
+    fi
+}
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        # Warn if any storage entries of type 'quantastor' exist in storage.cfg
+        cfg=/etc/pve/storage.cfg
+        if [ -f "$cfg" ] && grep -q '^quantastor:' "$cfg" 2>/dev/null; then
+            echo "WARNING: storage.cfg still contains 'quantastor' storage entries." >&2
+            echo "Remove them via the PVE UI or pvesm before uninstalling." >&2
+        fi
+
+        # Remove UI script tag from the PVE web UI HTML template.
+        remove_script_tag
+
+        # Remove the QuantaStorScan require line from Scan.pm.
+        # Use the full literal string to avoid accidentally matching unrelated lines.
+        SCANFILE=/usr/share/perl5/PVE/API2/Storage/Scan.pm
+        if [ -f "$SCANFILE" ]; then
+            sed -i '/require PVE::API2::Storage::QuantaStorScan;/d' "$SCANFILE"
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+exit 0

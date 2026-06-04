@@ -1,0 +1,5 @@
+src/perl5/PVE/Storage/Custom/QuantaStor.pm usr/share/perl5/PVE/Storage/Custom/
+src/perl5/PVE/Storage/QuantaStor/APIClient.pm usr/share/perl5/PVE/Storage/QuantaStor/
+src/perl5/PVE/Storage/QuantaStor/ISCSIManager.pm usr/share/perl5/PVE/Storage/QuantaStor/
+src/perl5/PVE/API2/Storage/QuantaStorScan.pm usr/share/perl5/PVE/API2/Storage/
+www/quantastor-storage.js usr/share/pve-manager/js/

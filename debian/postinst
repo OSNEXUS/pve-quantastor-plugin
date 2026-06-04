@@ -1,0 +1,74 @@
+#!/bin/sh
+set -e
+
+TPLFILE=/usr/share/pve-manager/index.html.tpl
+SCRIPTTAG='    <script type="text/javascript" src="/pve2/js/quantastor-storage.js"></script>'
+
+SCANFILE=/usr/share/perl5/PVE/API2/Storage/Scan.pm
+SCANREQ='require PVE::API2::Storage::QuantaStorScan;'
+
+inject_script_tag() {
+    if [ -f "$TPLFILE" ] && ! grep -qF 'quantastor-storage.js' "$TPLFILE"; then
+        sed -i '/pvemanagerlib\.js/a\'"$SCRIPTTAG" "$TPLFILE"
+    fi
+}
+
+inject_scan_require() {
+    if [ ! -f "$SCANFILE" ]; then
+        echo "pve-storage-quantastor: $SCANFILE not found — pool-scan endpoint not registered." \
+             "It will be injected automatically when pve-storage is installed." >&2
+        return 0
+    fi
+    if ! grep -qF 'QuantaStorScan' "$SCANFILE"; then
+        echo "$SCANREQ" >> "$SCANFILE"
+    fi
+}
+
+case "$1" in
+    configure)
+        if systemctl list-unit-files iscsid.service >/dev/null 2>&1; then
+            systemctl enable iscsid 2>/dev/null || true
+            if ! systemctl is-active --quiet iscsid 2>/dev/null; then
+                systemctl start iscsid || true
+            fi
+        fi
+
+        inject_script_tag
+        inject_scan_require
+
+        for svc in pvedaemon pveproxy pvestatd; do
+            if systemctl is-active --quiet "$svc" 2>/dev/null; then
+                systemctl restart "$svc" || true
+            fi
+        done
+        ;;
+
+    triggered)
+        # $2 tells us which file trigger fired.
+        case "$2" in
+            /usr/share/pve-manager/index.html.tpl)
+                inject_script_tag
+                if systemctl is-active --quiet pveproxy 2>/dev/null; then
+                    systemctl restart pveproxy || true
+                fi
+                ;;
+            /usr/share/perl5/PVE/API2/Storage/Scan.pm)
+                inject_scan_require
+                if systemctl is-active --quiet pvedaemon 2>/dev/null; then
+                    systemctl restart pvedaemon || true
+                fi
+                ;;
+            *)
+                # Re-inject both on any other trigger (belt-and-suspenders).
+                inject_script_tag
+                inject_scan_require
+                if systemctl is-active --quiet pveproxy 2>/dev/null; then
+                    systemctl restart pveproxy || true
+                fi
+                ;;
+        esac
+        ;;
+esac
+
+#DEBHELPER#
+exit 0
