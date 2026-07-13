@@ -257,8 +257,40 @@ create time (see [Troubleshooting](#troubleshooting) below).
 
 ### `Authentication check failed ... [err=26]` from QuantaStor
 
-The plugin sent credentials to the appliance and the appliance rejected
-them. Three possibilities, in decreasing order of frequency:
+QuantaStor reports err=26 whenever it processes a request whose HTTP Basic
+credentials are missing, empty, or wrong. Causes, in decreasing order of
+frequency:
+
+0. **The plugin never sent the credentials at all (fixed in current builds)** —
+   older builds authenticated via LWP's challenge-response, which only attaches
+   the `Authorization` header if the appliance first issues a
+   `401 WWW-Authenticate: Basic` challenge whose realm string matches exactly.
+   Some QuantaStor versions answer an unauthenticated API request with an err=26
+   body under HTTP 200 instead of a 401 challenge, or use a different realm
+   string — so LWP sent no credentials and the appliance returned err=26 that
+   looked exactly like a wrong password.
+
+   The tell-tale sign: **`curl -u admin:'<pw>'` succeeds against the same
+   appliance but the plugin still fails.** `curl` sends Basic auth
+   preemptively; the older plugin waited for a challenge that never came.
+   Current builds send Basic preemptively too — upgrade the plugin, no config
+   change needed. To confirm it's this case rather than a genuinely bad
+   password, compare preemptive vs. challenge-response with curl:
+   ```bash
+   # Preemptive (what curl and current builds do) — expect success:
+   curl -k -u admin:'<pw>' \
+     "https://<api_host>:8153/qstorapi/storagePoolGet?storagePool=<pool>"
+
+   # Challenge-response (what older builds did) — if this err=26's while the
+   # line above succeeds, you hit exactly this bug:
+   curl -k --anyauth -u admin:'<pw>' \
+     "https://<api_host>:8153/qstorapi/storagePoolGet?storagePool=<pool>"
+
+   # Inspect what (if any) auth challenge the appliance issues:
+   curl -k -sD - -o /dev/null \
+     "https://<api_host>:8153/qstorapi/storagePoolGet?storagePool=<pool>" \
+     | grep -i www-authenticate    # empty output = no challenge issued
+   ```
 
 1. **The `.pw` file is missing on the local node** — pre-2026-05-26 plugin
    builds silently ship an empty password in this case. Check:
