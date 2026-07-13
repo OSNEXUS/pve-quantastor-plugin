@@ -163,10 +163,9 @@ is the pmxcfs cluster filesystem, so the password file is automatically
 replicated to every node in the cluster.
 
 If `<storeid>.pw` is missing or empty on a node, every plugin operation on
-that node fails. Recent plugin builds (≥ 0.2.0 post-2026-05-26) surface this
-as an explicit error naming the file and remediation; older builds silently
-shipped an empty password and surfaced a misleading `[err=26] Authentication
-check failed` from QuantaStor.
+that node fails. 0.2.0 and later surface this as an explicit error naming the
+file and remediation; earlier builds silently shipped an empty password and
+surfaced a misleading `[err=26] Authentication check failed` from QuantaStor.
 
 ### Web UI
 
@@ -292,8 +291,8 @@ frequency:
      | grep -i www-authenticate    # empty output = no challenge issued
    ```
 
-1. **The `.pw` file is missing on the local node** — pre-2026-05-26 plugin
-   builds silently ship an empty password in this case. Check:
+1. **The `.pw` file is missing on the local node** — builds before 0.2.0
+   silently ship an empty password in this case. Check:
    ```bash
    ls -la /etc/pve/priv/storage/<storeid>.pw
    ```
@@ -322,7 +321,7 @@ frequency:
 
 ### `QuantaStor: no password configured for storage 'X' on node 'Y'`
 
-Surfaced by plugin builds ≥ 0.2.0 post-2026-05-26 in exactly the situation
+Surfaced by 0.2.0 and later in exactly the situation
 that used to produce err=26 above. The message names the storeid, the node,
 the expected file path, and the `pvesm set` remediation command — follow it
 verbatim.
@@ -338,8 +337,7 @@ because the plugin declares `api()=13` for 9.1 compatibility. See
 Hard-block — the plugin's declared API version is higher than your PVE
 version supports, so PVE refuses to load it. The storage type `quantastor`
 will not appear in `pvesm` or the UI. Resolution: ensure you are on plugin
-0.2.0 from 2026-05-26 or later (where `api()` was reverted from 14 back to
-13 for 9.1 compat).
+0.2.0 or later (where `api()` is 13 for 9.1 compatibility).
 
 ### Storage shows `active` on some nodes, `inactive` on others
 
@@ -559,7 +557,7 @@ The top-level PVE storage plugin. Inherits from `PVE::Storage::Plugin` and wires
 
 Live migration, offline migration, resize on running VMs, snapshot/rollback,
 template/clone, and VM destroy have all been validated on a two-node PVE 9.2
-cluster sharing a common QuantaStor portal (verified 2026-05-29).
+cluster sharing a common QuantaStor portal.
 
 One minor quirk: `qm template` (`create_base`) re-logins to the renamed
 `base-*` volume after the operation, leaving an active iSCSI session on the
@@ -630,7 +628,7 @@ A future plugin release will revisit this once PVE 9.1.x support is no longer ne
 
 PVE's storage subsystem hard-blocks a plugin whose declared `api()` lies
 outside the range `[APIVER - APIAGE, APIVER]`. The plugin currently declares
-`api()=13`. Empirically verified against live nodes (2026-05-26):
+`api()=13`. Empirically verified against live nodes:
 
 | PVE Version | `APIVER` | Plugin loads? | Notes |
 |---|---|---|---|
