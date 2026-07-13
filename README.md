@@ -13,7 +13,7 @@ storage backend for virtual machines and containers.
 | `QuantaStor/APIClient.pm` | Complete — clean REST client, 46 unit tests |
 | `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 42 unit tests |
 | `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 55 unit tests |
-| Debian packaging | Complete — `pve-storage-quantastor_0.2.0-1_all.deb` |
+| Debian packaging | Complete — `pve-storage-quantastor_0.2.1-1_all.deb` |
 
 ---
 
@@ -101,7 +101,7 @@ pve-quantastor-plugin/
 Download the latest `.deb` from the releases page and install it on each PVE node:
 
 ```bash
-dpkg -i pve-storage-quantastor_0.2.0-1_all.deb
+dpkg -i pve-storage-quantastor_0.2.1-1_all.deb
 # PVE services are restarted automatically by postinst
 ```
 
@@ -146,7 +146,7 @@ systemctl restart pvedaemon pveproxy pvestatd
 apt install debhelper
 
 bash build-deb.sh
-# Produces ../pve-storage-quantastor_0.2.0-1_all.deb
+# Produces ../pve-storage-quantastor_0.2.1-1_all.deb
 ```
 
 ---
@@ -260,8 +260,8 @@ QuantaStor reports err=26 whenever it processes a request whose HTTP Basic
 credentials are missing, empty, or wrong. Causes, in decreasing order of
 frequency:
 
-0. **The plugin never sent the credentials at all (fixed in current builds)** —
-   older builds authenticated via LWP's challenge-response, which only attaches
+0. **The plugin never sent the credentials at all (fixed in 0.2.1)** —
+   0.2.0 and earlier authenticated via LWP's challenge-response, which only attaches
    the `Authorization` header if the appliance first issues a
    `401 WWW-Authenticate: Basic` challenge whose realm string matches exactly.
    Some QuantaStor versions answer an unauthenticated API request with an err=26
@@ -272,15 +272,15 @@ frequency:
    The tell-tale sign: **`curl -u admin:'<pw>'` succeeds against the same
    appliance but the plugin still fails.** `curl` sends Basic auth
    preemptively; the older plugin waited for a challenge that never came.
-   Current builds send Basic preemptively too — upgrade the plugin, no config
+   0.2.1 sends Basic preemptively too — upgrade to 0.2.1 or later, no config
    change needed. To confirm it's this case rather than a genuinely bad
    password, compare preemptive vs. challenge-response with curl:
    ```bash
-   # Preemptive (what curl and current builds do) — expect success:
+   # Preemptive (what curl and 0.2.1+ do) — expect success:
    curl -k -u admin:'<pw>' \
      "https://<api_host>:8153/qstorapi/storagePoolGet?storagePool=<pool>"
 
-   # Challenge-response (what older builds did) — if this err=26's while the
+   # Challenge-response (what 0.2.0 and earlier did) — if this err=26's while the
    # line above succeeds, you hit exactly this bug:
    curl -k --anyauth -u admin:'<pw>' \
      "https://<api_host>:8153/qstorapi/storagePoolGet?storagePool=<pool>"
@@ -674,7 +674,7 @@ on live PVE 9.1.x / 9.2.x + QuantaStor: create → snapshot → rollback → res
 
 ### ~~Phase 4 — Packaging~~ ✅ Complete
 
-Debian package `pve-storage-quantastor_0.2.0-1_all.deb` builds cleanly with `dpkg-buildpackage`
+Debian package `pve-storage-quantastor_0.2.1-1_all.deb` builds cleanly with `dpkg-buildpackage`
 and installs successfully on PVE 9.1.1. Plugin lives in `/usr/share/perl5/PVE/Storage/Custom/`
 (PVE's auto-discovery path for third-party plugins). `postinst` restarts PVE services and
 registers dpkg triggers so the UI panel and pool-scan endpoint survive future `pve-manager`
