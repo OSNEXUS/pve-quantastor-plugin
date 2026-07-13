@@ -13,7 +13,7 @@ storage backend for virtual machines and containers.
 | `QuantaStor/APIClient.pm` | Complete — clean REST client, 46 unit tests |
 | `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 42 unit tests |
 | `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 55 unit tests |
-| Debian packaging | Complete — `pve-storage-quantastor_0.2.0-1_all.deb` |
+| Debian packaging | Complete — `pve-storage-quantastor_0.2.1-1_all.deb` |
 
 ---
 
@@ -101,7 +101,7 @@ pve-quantastor-plugin/
 Download the latest `.deb` from the releases page and install it on each PVE node:
 
 ```bash
-dpkg -i pve-storage-quantastor_0.2.0-1_all.deb
+dpkg -i pve-storage-quantastor_0.2.1-1_all.deb
 # PVE services are restarted automatically by postinst
 ```
 
@@ -146,7 +146,7 @@ systemctl restart pvedaemon pveproxy pvestatd
 apt install debhelper
 
 bash build-deb.sh
-# Produces ../pve-storage-quantastor_0.2.0-1_all.deb
+# Produces ../pve-storage-quantastor_0.2.1-1_all.deb
 ```
 
 ---
@@ -163,10 +163,9 @@ is the pmxcfs cluster filesystem, so the password file is automatically
 replicated to every node in the cluster.
 
 If `<storeid>.pw` is missing or empty on a node, every plugin operation on
-that node fails. Recent plugin builds (≥ 0.2.0 post-2026-05-26) surface this
-as an explicit error naming the file and remediation; older builds silently
-shipped an empty password and surfaced a misleading `[err=26] Authentication
-check failed` from QuantaStor.
+that node fails. 0.2.0 and later surface this as an explicit error naming the
+file and remediation; earlier builds silently shipped an empty password and
+surfaced a misleading `[err=26] Authentication check failed` from QuantaStor.
 
 ### Web UI
 
@@ -257,11 +256,43 @@ create time (see [Troubleshooting](#troubleshooting) below).
 
 ### `Authentication check failed ... [err=26]` from QuantaStor
 
-The plugin sent credentials to the appliance and the appliance rejected
-them. Three possibilities, in decreasing order of frequency:
+QuantaStor reports err=26 whenever it processes a request whose HTTP Basic
+credentials are missing, empty, or wrong. Causes, in decreasing order of
+frequency:
 
-1. **The `.pw` file is missing on the local node** — pre-2026-05-26 plugin
-   builds silently ship an empty password in this case. Check:
+0. **The plugin never sent the credentials at all (fixed in 0.2.1)** —
+   0.2.0 and earlier authenticated via LWP's challenge-response, which only attaches
+   the `Authorization` header if the appliance first issues a
+   `401 WWW-Authenticate: Basic` challenge whose realm string matches exactly.
+   Some QuantaStor versions answer an unauthenticated API request with an err=26
+   body under HTTP 200 instead of a 401 challenge, or use a different realm
+   string — so LWP sent no credentials and the appliance returned err=26 that
+   looked exactly like a wrong password.
+
+   The tell-tale sign: **`curl -u admin:'<pw>'` succeeds against the same
+   appliance but the plugin still fails.** `curl` sends Basic auth
+   preemptively; the older plugin waited for a challenge that never came.
+   0.2.1 sends Basic preemptively too — upgrade to 0.2.1 or later, no config
+   change needed. To confirm it's this case rather than a genuinely bad
+   password, compare preemptive vs. challenge-response with curl:
+   ```bash
+   # Preemptive (what curl and 0.2.1+ do) — expect success:
+   curl -k -u admin:'<pw>' \
+     "https://<api_host>:8153/qstorapi/storagePoolGet?storagePool=<pool>"
+
+   # Challenge-response (what 0.2.0 and earlier did) — if this err=26's while the
+   # line above succeeds, you hit exactly this bug:
+   curl -k --anyauth -u admin:'<pw>' \
+     "https://<api_host>:8153/qstorapi/storagePoolGet?storagePool=<pool>"
+
+   # Inspect what (if any) auth challenge the appliance issues:
+   curl -k -sD - -o /dev/null \
+     "https://<api_host>:8153/qstorapi/storagePoolGet?storagePool=<pool>" \
+     | grep -i www-authenticate    # empty output = no challenge issued
+   ```
+
+1. **The `.pw` file is missing on the local node** — builds before 0.2.0
+   silently ship an empty password in this case. Check:
    ```bash
    ls -la /etc/pve/priv/storage/<storeid>.pw
    ```
@@ -290,7 +321,7 @@ them. Three possibilities, in decreasing order of frequency:
 
 ### `QuantaStor: no password configured for storage 'X' on node 'Y'`
 
-Surfaced by plugin builds ≥ 0.2.0 post-2026-05-26 in exactly the situation
+Surfaced by 0.2.0 and later in exactly the situation
 that used to produce err=26 above. The message names the storeid, the node,
 the expected file path, and the `pvesm set` remediation command — follow it
 verbatim.
@@ -306,8 +337,7 @@ because the plugin declares `api()=13` for 9.1 compatibility. See
 Hard-block — the plugin's declared API version is higher than your PVE
 version supports, so PVE refuses to load it. The storage type `quantastor`
 will not appear in `pvesm` or the UI. Resolution: ensure you are on plugin
-0.2.0 from 2026-05-26 or later (where `api()` was reverted from 14 back to
-13 for 9.1 compat).
+0.2.0 or later (where `api()` is 13 for 9.1 compatibility).
 
 ### Storage shows `active` on some nodes, `inactive` on others
 
@@ -527,7 +557,7 @@ The top-level PVE storage plugin. Inherits from `PVE::Storage::Plugin` and wires
 
 Live migration, offline migration, resize on running VMs, snapshot/rollback,
 template/clone, and VM destroy have all been validated on a two-node PVE 9.2
-cluster sharing a common QuantaStor portal (verified 2026-05-29).
+cluster sharing a common QuantaStor portal.
 
 One minor quirk: `qm template` (`create_base`) re-logins to the renamed
 `base-*` volume after the operation, leaving an active iSCSI session on the
@@ -598,7 +628,7 @@ A future plugin release will revisit this once PVE 9.1.x support is no longer ne
 
 PVE's storage subsystem hard-blocks a plugin whose declared `api()` lies
 outside the range `[APIVER - APIAGE, APIVER]`. The plugin currently declares
-`api()=13`. Empirically verified against live nodes (2026-05-26):
+`api()=13`. Empirically verified against live nodes:
 
 | PVE Version | `APIVER` | Plugin loads? | Notes |
 |---|---|---|---|
@@ -644,7 +674,7 @@ on live PVE 9.1.x / 9.2.x + QuantaStor: create → snapshot → rollback → res
 
 ### ~~Phase 4 — Packaging~~ ✅ Complete
 
-Debian package `pve-storage-quantastor_0.2.0-1_all.deb` builds cleanly with `dpkg-buildpackage`
+Debian package `pve-storage-quantastor_0.2.1-1_all.deb` builds cleanly with `dpkg-buildpackage`
 and installs successfully on PVE 9.1.1. Plugin lives in `/usr/share/perl5/PVE/Storage/Custom/`
 (PVE's auto-discovery path for third-party plugins). `postinst` restarts PVE services and
 registers dpkg triggers so the UI panel and pool-scan endpoint survive future `pve-manager`

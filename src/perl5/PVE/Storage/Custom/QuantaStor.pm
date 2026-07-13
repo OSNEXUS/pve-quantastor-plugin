@@ -18,7 +18,7 @@ if (eval { require PVE::SafeSyslog; 1 }) {
     $_syslog_fn = \&PVE::SafeSyslog::syslog;
 }
 
-our $VERSION = '0.2.0';
+our $VERSION = '0.2.1';
 
 =head1 NAME
 

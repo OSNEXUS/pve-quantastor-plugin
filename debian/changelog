@@ -1,3 +1,19 @@
+pve-storage-quantastor (0.2.1-1) unstable; urgency=medium
+
+  * APIClient: send HTTP Basic credentials preemptively instead of via LWP
+    challenge-response ($ua->credentials). QuantaStor REST endpoints often do
+    not issue a 401 WWW-Authenticate Basic challenge (and the realm varies
+    across versions), so the old client attached no Authorization header and
+    the appliance returned "[err=26] Authentication check failed" even when the
+    password was correct (curl -u works because it sends Basic preemptively).
+    Removes all dependence on the challenge and realm.
+  * Adds regression tests asserting the real UserAgent carries a single-line
+    Authorization: Basic header.
+  * README: err=26 troubleshooting now leads with this cause and curl
+    reproduction commands; docs use release-version terms.
+
+ -- OSNexus <support@osnexus.com>  Mon, 13 Jul 2026 21:15:55 +0000
+
 pve-storage-quantastor (0.2.0-1) unstable; urgency=medium
 
   * v0.2.0 — first-class PVE storage type 'quantastor' (no PVE core patching).

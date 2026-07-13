@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak confess);
 use URI::Escape qw(uri_escape);
+use MIME::Base64 qw(encode_base64);
 use LWP::UserAgent;
 use JSON::PP qw(decode_json encode_json);
 
@@ -105,12 +106,21 @@ sub _ua {
     }
 
     $ua->default_header('Accept' => 'application/json');
-    $ua->credentials(
-        "$self->{host}:$self->{port}",
-        'Proxmox API',
-        $self->{username},
-        $self->{password},
-    );
+
+    # Send HTTP Basic credentials PREEMPTIVELY on every request, rather than
+    # via $ua->credentials() (challenge-response). QuantaStor's REST endpoints
+    # do not reliably issue a 401 WWW-Authenticate Basic challenge — some
+    # versions answer an unauthenticated request with an "[err=26] Authentication
+    # check failed" body under HTTP 200 instead — and $ua->credentials() only
+    # attaches the Authorization header if BOTH the netloc AND the realm string
+    # in that challenge match. When no challenge arrives (or the realm differs
+    # across QuantaStor versions), LWP silently sends no credentials and the
+    # appliance returns err=26 — indistinguishable from a wrong password even
+    # when the password is correct (verifiable via `curl -u`, which also sends
+    # Basic preemptively). Setting the header directly removes all dependence on
+    # the challenge and realm.
+    my $token = encode_base64("$self->{username}:$self->{password}", '');
+    $ua->default_header('Authorization' => "Basic $token");
 
     $self->{_ua} = $ua;
     return $ua;

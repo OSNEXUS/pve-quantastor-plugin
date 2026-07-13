@@ -108,6 +108,46 @@ subtest 'ca_cert path enables verification with custom CA' => sub {
 };
 
 # ---------------------------------------------------------------------------
+# 1c. Preemptive HTTP Basic auth
+#
+# Regression guard: the client MUST attach an Authorization: Basic header to
+# every request up front rather than relying on $ua->credentials()
+# challenge-response, which silently sends nothing when QuantaStor issues no
+# 401 challenge (or one whose realm doesn't match) — surfacing as a misleading
+# "[err=26] Authentication check failed" despite correct credentials.
+# ---------------------------------------------------------------------------
+
+subtest 'preemptive Authorization: Basic header is set on the real UA' => sub {
+    use MIME::Base64 qw(decode_base64);
+
+    my $client = PVE::Storage::QuantaStor::APIClient->new(
+        host => 'x', username => 'admin', password => 's3cr3t',
+    );
+    my $ua = $client->_ua;
+
+    my $hdr = $ua->default_header('Authorization');
+    ok defined $hdr && length $hdr, 'Authorization header is present';
+    like $hdr, qr/^Basic \S+$/, 'header is Basic <token>';
+
+    (my $token = $hdr) =~ s/^Basic //;
+    is decode_base64($token), 'admin:s3cr3t', 'token decodes to user:pass';
+
+    # The token must be a single unbroken line — encode_base64 inserts a
+    # newline every 76 chars by default, which would corrupt the header for
+    # long credentials. The second arg to encode_base64 ('') suppresses it.
+    unlike $token, qr/\s/, 'token contains no embedded whitespace/newlines';
+};
+
+subtest 'long credentials produce a single-line token' => sub {
+    my $long = 'p' x 200;   # long enough to trip encode_base64's 76-char wrap
+    my $client = PVE::Storage::QuantaStor::APIClient->new(
+        host => 'x', username => 'admin', password => $long,
+    );
+    my $hdr = $client->_ua->default_header('Authorization');
+    unlike $hdr, qr/\n/, 'no newline in header even for long passwords';
+};
+
+# ---------------------------------------------------------------------------
 # 2. pool_get
 # ---------------------------------------------------------------------------
 
