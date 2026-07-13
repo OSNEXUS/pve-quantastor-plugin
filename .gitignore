@@ -8,6 +8,11 @@ debian/*.substvars
 debian/pve-storage-quantastor/
 debian/.debhelper/
 
+# Built deb staged at repo root for upload to GitHub Releases — never commit
+*.deb
+*.buildinfo
+*.changes
+
 # Legacy patch source directories (untracked reference files)
 patches/**/src/
 
