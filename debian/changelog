@@ -1,3 +1,41 @@
+pve-storage-quantastor (1.0.0-1) unstable; urgency=medium
+
+  * v1.0.0 — first general-availability release of the QuantaStor storage
+    plugin for Proxmox VE (VM disks and LXC containers on iSCSI block
+    volumes). Changes since 0.2.1:
+  * Containers: rootdir content type (block-based rootdir, same model as
+    RBD/LVM-thin); filesystem-consistent snapshots of running containers via
+    volume_snapshot_needs_fsfreeze; restart migration; extra mount points;
+    pct fstrim discard passthrough; unprivileged containers. CT templates
+    (vztmpl) deliberately unsupported — keep them on a file-based storage.
+  * Thin provisioning: volume_create now sends thinProvisioned explicitly
+    (absent boolean meant thick — every volume was 100% space-reserved); the
+    previously-dead 'sparse' storage.cfg option is honored, default ON.
+  * UI: Content selector offers Disk image + Container as a multi-select
+    (was single-select); both preselected on the Add dialog.
+  * free_image: falls back to per-snapshot deletion when a cascade delete
+    fails or partially completes; retries the volume delete through brief
+    post-teardown busy windows.
+  * Session waits now default to 200s (was 30s; create_base previously passed
+    an explicit 120s) so snapshot rollback and template conversion outlast
+    QuantaStor's session-manager refresh cycle, which has a hardcoded 180s
+    floor and cannot be tuned lower. Shorter waits failed deterministically
+    when issued soon after a stop, and the failed PVE task left a rollback
+    lock that blocked every subsequent start.
+  * activate_volume: retries the ACL add through transient 5xx responses.
+    QuantaStor serves a clone as an async ZFS "instant replica" and can return
+    the volume before SCST has created its iSCSI target, so the ACL add came
+    back "HTTP 500 interrupted by signal" and killed roughly half of clones.
+    The add is idempotent, so retrying is safe; non-5xx failures (auth,
+    not-found) still fail immediately instead of stalling for the budget.
+  * README: container usage + limitations, err=493 troubleshooting incl. the
+    server-side fix, content-type/pre-start gotcha.
+  * Recommended appliance build: a current QuantaStor 7 build carrying the
+    server-side fix for the template-conversion rename wedge and the
+    fresh-snapshot delete window.
+
+ -- OSNexus <support@osnexus.com>  Thu, 27 Aug 2026 17:09:46 +0000
+
 pve-storage-quantastor (0.2.1-1) unstable; urgency=medium
 
   * APIClient: send HTTP Basic credentials preemptively instead of via LWP

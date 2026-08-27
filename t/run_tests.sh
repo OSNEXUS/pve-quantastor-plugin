@@ -23,7 +23,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Default options
 RUN_INTEGRATION=0
 PROVE_ARGS=("-l" "--formatter=TAP::Formatter::Console")
-UNIT_TESTS=("$SCRIPT_DIR/01-api-client.t" "$SCRIPT_DIR/02-iscsi-manager.t")
+UNIT_TESTS=("$SCRIPT_DIR/01-api-client.t" "$SCRIPT_DIR/02-iscsi-manager.t" "$SCRIPT_DIR/04-plugin.t" "$SCRIPT_DIR/05-no-ticket-refs.t")
 
 # Parse arguments
 for arg in "$@"; do

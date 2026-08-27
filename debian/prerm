@@ -11,14 +11,8 @@ remove_script_tag() {
 
 case "$1" in
     remove|upgrade|deconfigure)
-        # Warn if any storage entries of type 'quantastor' exist in storage.cfg
-        cfg=/etc/pve/storage.cfg
-        if [ -f "$cfg" ] && grep -q '^quantastor:' "$cfg" 2>/dev/null; then
-            echo "WARNING: storage.cfg still contains 'quantastor' storage entries." >&2
-            echo "Remove them via the PVE UI or pvesm before uninstalling." >&2
-        fi
-
-        # Remove UI script tag from the PVE web UI HTML template.
+        # Remove the UI script tag from the PVE web UI HTML template. On upgrade
+        # this round-trips: postinst re-injects it on configure.
         remove_script_tag
 
         # Remove the QuantaStorScan require line from Scan.pm.
@@ -29,6 +23,18 @@ case "$1" in
         fi
         ;;
 esac
+
+# Warn about leftover 'quantastor' storage entries ONLY on an actual uninstall.
+# On upgrade/deconfigure the package (and its storages) are staying, so the
+# "remove them before uninstalling" caution would be misleading noise — it used
+# to fire on every deb upgrade.
+if [ "$1" = "remove" ]; then
+    cfg=/etc/pve/storage.cfg
+    if [ -f "$cfg" ] && grep -q '^quantastor:' "$cfg" 2>/dev/null; then
+        echo "WARNING: storage.cfg still contains 'quantastor' storage entries." >&2
+        echo "Remove them via the PVE UI or pvesm before uninstalling." >&2
+    fi
+fi
 
 #DEBHELPER#
 exit 0

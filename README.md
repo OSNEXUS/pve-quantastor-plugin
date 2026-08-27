@@ -10,10 +10,10 @@ storage backend for virtual machines and containers.
 
 | Component | State |
 |---|---|
-| `QuantaStor/APIClient.pm` | Complete — clean REST client, 46 unit tests |
+| `QuantaStor/APIClient.pm` | Complete — clean REST client, 50 unit tests |
 | `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 42 unit tests |
-| `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 55 unit tests |
-| Debian packaging | Complete — `pve-storage-quantastor_0.2.1-1_all.deb` |
+| `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 65 unit tests |
+| Debian packaging | Complete — `pve-storage-quantastor_1.0.0-1_all.deb` |
 
 ---
 
@@ -65,7 +65,7 @@ PVE volume names follow the standard Proxmox convention:
 ## Repository Layout
 
 ```
-pve-quantastor-plugin/
+.
 ├── src/
 │   └── perl5/PVE/
 │       ├── API2/Storage/
@@ -77,10 +77,10 @@ pve-quantastor-plugin/
 │               ├── APIClient.pm      REST client for QuantaStor API
 │               └── ISCSIManager.pm   iSCSI initiator lifecycle management
 ├── t/
-│   ├── 01-api-client.t               Unit tests — APIClient (46 tests)
+│   ├── 01-api-client.t               Unit tests — APIClient (50 tests)
 │   ├── 02-iscsi-manager.t            Unit tests — ISCSIManager (42 tests)
 │   ├── 03-integration.t              Integration tests (requires live appliance)
-│   ├── 04-plugin.t                   Unit tests — QuantaStorPlugin (55 tests)
+│   ├── 04-plugin.t                   Unit tests — QuantaStorPlugin (65 tests)
 │   ├── run_tests.sh                  Test runner script
 │   └── lib/Test/QuantaStor/
 │       ├── MockUA.pm                 Mock LWP::UserAgent for APIClient tests
@@ -101,7 +101,7 @@ pve-quantastor-plugin/
 Download the latest `.deb` from the releases page and install it on each PVE node:
 
 ```bash
-dpkg -i pve-storage-quantastor_0.2.1-1_all.deb
+dpkg -i pve-storage-quantastor_1.0.0-1_all.deb
 # PVE services are restarted automatically by postinst
 ```
 
@@ -146,7 +146,7 @@ systemctl restart pvedaemon pveproxy pvestatd
 apt install debhelper
 
 bash build-deb.sh
-# Produces ../pve-storage-quantastor_0.2.1-1_all.deb
+# Produces ../pve-storage-quantastor_1.0.0-1_all.deb
 ```
 
 ---
@@ -163,9 +163,10 @@ is the pmxcfs cluster filesystem, so the password file is automatically
 replicated to every node in the cluster.
 
 If `<storeid>.pw` is missing or empty on a node, every plugin operation on
-that node fails. 0.2.0 and later surface this as an explicit error naming the
-file and remediation; earlier builds silently shipped an empty password and
-surfaced a misleading `[err=26] Authentication check failed` from QuantaStor.
+that node fails. 0.2.0 and later surface this
+as an explicit error naming the file and remediation; older builds silently
+shipped an empty password and surfaced a misleading `[err=26] Authentication
+check failed` from QuantaStor.
 
 ### Web UI
 
@@ -207,6 +208,12 @@ Single-quote the password so the shell does not interpret special characters
 `--portal` and `--ssl_verify` are optional. `--portal` defaults to `--api_host`
 if omitted; `--ssl_verify` defaults to `0` (off, suitable for self-signed
 certificates).
+
+Volumes are **thin provisioned by default**: they consume pool space as data
+is written, not their full size at creation. Set `sparse 0` on the storage to
+opt into thick provisioning (each volume reserves 100% of its size in the
+pool at creation time). Note this default is the opposite of PVE's built-in
+ZFS plugins, where `sparse` defaults to off.
 
 The resulting `storage.cfg` entry contains no plaintext password:
 
@@ -252,35 +259,88 @@ create time (see [Troubleshooting](#troubleshooting) below).
 
 ---
 
+## Container (LXC) support
+
+LXC containers can place their root filesystem (and additional mount points) on
+QuantaStor storage. Enable the `Container` content type on the storage — tick
+it in the web UI dialog, or:
+
+```bash
+pvesm set <storeid> --content images,rootdir
+```
+
+### How it works
+
+A container volume is the same raw iSCSI LUN as a VM disk (`vm-<vmid>-disk-N`,
+thin provisioned by default). The difference is what sits on top: PVE's
+container stack (`PVE::LXC`) formats the LUN with ext4, mounts it, and runs
+`resize2fs` on grow — the plugin's job is only to hand PVE a local block
+device, exactly as it does for VMs. This is the same block-based rootdir model
+used by PVE's built-in RBD and LVM-thin plugins.
+
+Validated container lifecycle (PVE 9.1/9.2, two-node cluster):
+
+| Operation | Notes |
+|---|---|
+| Create / start / stop / destroy | Privileged and unprivileged CTs |
+| Snapshot of a running CT | Root fs (and mount points) are fsfreeze'd first, so snapshots are filesystem-consistent |
+| Snapshot delete / rollback | Rollback requires the CT stopped (PVE enforces this) |
+| Resize (`pct resize`) | Online and offline; LUN grows, then PVE runs `resize2fs` |
+| Template + clones | `pct template`, then linked or full clones; destroy clones before their template |
+| Migration between nodes | Restart mode only — containers on block storage cannot live-migrate (PVE-wide constraint, same as RBD/LVM-thin) |
+| `pct move-volume` | Both directions, to/from other storages; CT moves are file-level (rsync), not block copies |
+| Extra mount points | `pct set <ctid> -mp0 <storeid>:<size>,mp=/path` allocates a dedicated LUN per mount point |
+| Discard / TRIM | `pct fstrim <ctid>` returns freed space to the thin volume (verified end-to-end: ext4 → iSCSI UNMAP → pool) |
+
+### Container limitations
+
+- **Container templates (`vztmpl`) are not supported** — template tarballs need
+  a POSIX filesystem to live on, which a raw block LUN can't provide. Keep CT
+  templates on `local` (or another file-based storage) and create containers
+  from there onto QuantaStor. This mirrors RBD, where vztmpl is likewise not
+  storable.
+- **HA fencing with mounted CT filesystems** has not been explicitly validated.
+  PVE's config locking prevents two nodes from mounting the same LUN during
+  normal operation (including migration), but fence-triggered recovery of a
+  node running CTs on QuantaStor storage has not been exercised.
+- **QuantaStor version**: use a current QuantaStor 7 build that includes the
+  server-side fix for the template-conversion volume wedge and the
+  fresh-snapshot delete window. Older 7.0 builds wedge volumes on template
+  conversion (stale NVMeoF export after rename) and refuse fresh-snapshot
+  deletes for several minutes (see Troubleshooting, `err=493`).
+
+---
+
 ## Troubleshooting
 
 ### `Authentication check failed ... [err=26]` from QuantaStor
 
 QuantaStor reports err=26 whenever it processes a request whose HTTP Basic
-credentials are missing, empty, or wrong. Causes, in decreasing order of
-frequency:
+credentials are missing, empty, or wrong. In the field this has three distinct
+causes — the first was the subtle one, fixed in the build noted below:
 
 0. **The plugin never sent the credentials at all (fixed in 0.2.1)** —
-   0.2.0 and earlier authenticated via LWP's challenge-response, which only attaches
-   the `Authorization` header if the appliance first issues a
-   `401 WWW-Authenticate: Basic` challenge whose realm string matches exactly.
-   Some QuantaStor versions answer an unauthenticated API request with an err=26
-   body under HTTP 200 instead of a 401 challenge, or use a different realm
-   string — so LWP sent no credentials and the appliance returned err=26 that
-   looked exactly like a wrong password.
+   builds before this fix authenticated via LWP's challenge-response
+   (`$ua->credentials`), which only attaches the `Authorization` header if the
+   appliance first issues a `401 WWW-Authenticate: Basic` challenge whose realm
+   string matches exactly. Several QuantaStor versions answer an
+   unauthenticated API request with an err=26 body under HTTP 200 instead of a
+   401 challenge, or use a different realm string — so LWP sent no credentials
+   and the appliance returned err=26 that looked exactly like a wrong password.
 
    The tell-tale sign: **`curl -u admin:'<pw>'` succeeds against the same
    appliance but the plugin still fails.** `curl` sends Basic auth
-   preemptively; the older plugin waited for a challenge that never came.
-   0.2.1 sends Basic preemptively too — upgrade to 0.2.1 or later, no config
-   change needed. To confirm it's this case rather than a genuinely bad
-   password, compare preemptive vs. challenge-response with curl:
+   preemptively; the old plugin waited for a challenge that never came. This
+   build now sends Basic preemptively too, matching curl. If you can reproduce
+   this, upgrade the plugin — no config change is needed. To confirm it's this
+   case rather than a genuinely bad password, compare preemptive vs.
+   challenge-response with curl:
    ```bash
-   # Preemptive (what curl and 0.2.1+ do) — expect success:
+   # Preemptive (what curl and the fixed plugin do) — expect success:
    curl -k -u admin:'<pw>' \
      "https://<api_host>:8153/qstorapi/storagePoolGet?storagePool=<pool>"
 
-   # Challenge-response (what 0.2.0 and earlier did) — if this err=26's while the
+   # Challenge-response (what the OLD plugin did) — if this err=26's while the
    # line above succeeds, you hit exactly this bug:
    curl -k --anyauth -u admin:'<pw>' \
      "https://<api_host>:8153/qstorapi/storagePoolGet?storagePool=<pool>"
@@ -319,6 +379,60 @@ frequency:
    eaten parts of it. Re-set with `pvesm set <storeid> -password '<pw>'`
    (single-quoted) and try again.
 
+### `Failed to delete storage volume ... [err=493]` on destroy or snapshot delete
+
+QuantaStor raised `OSN_ERR_DELETE_ZVOL_FAILED`: the backing ZFS volume was
+busy when the appliance tried to destroy it.
+
+**Appliance builds carrying the server-side fix eliminate all known causes** —
+the stale NVMeoF export left by volume renames (the template-conversion
+wedge), the ~5-minute undeletable-fresh-snapshot
+window (a udev watch race, plus snapshots no longer auto-export at creation),
+and the boot-time nvmet serial error. On such builds a persistent err=493 is
+unexpected — capture `/var/log/qs/qs_service.log` around the failure and file
+a ticket.
+
+On **older appliance builds**:
+
+1. **Brief post-teardown window:** the zvol can stay busy for a few seconds
+   after iSCSI target teardown. The plugin already rides this out
+   (`free_image` retries, and falls back to per-snapshot deletion if a cascade
+   delete partially completed). If a destroy still fails, simply retry it.
+2. **Fresh-snapshot window (~5 minutes):** a failed `pct delsnapshot` /
+   `qm delsnapshot` leaves the guest locked — unlock with `pct unlock <ctid>`
+   (or `qm unlock <vmid>`) and retry after a few minutes.
+3. **Persistent — stale NVMeoF export after a rename** (`qm template` /
+   `pct template` renames `vm-* -> base-*`): the nvmet subsystem keeps the OLD
+   name, teardown never finds it, and its namespace holds the zvol open
+   indefinitely. Confirm and clear on the appliance (the subsystem is named
+   after the volume's *original* name):
+
+   ```bash
+   grep -H <volume-guid> /sys/kernel/config/nvmet/subsystems/*/namespaces/*/device_path
+   SUBNAME=<matching subsystem nqn>
+   rm -f /sys/kernel/config/nvmet/ports/*/subsystems/$SUBNAME
+   SUB=/sys/kernel/config/nvmet/subsystems/$SUBNAME
+   echo 0 > $SUB/namespaces/1/enable; rmdir $SUB/namespaces/1 $SUB
+   ```
+
+   then retry the delete. No reboot required. Upgrading the appliance is the
+   real fix.
+
+### Container fails to start: `run_buffer: ... Script exited with status 255` / `Failed to run lxc.hook.pre-start`
+
+If a container on QuantaStor storage fails to start with only this opaque lxc
+error, check that the storage still advertises the `Container` content type —
+PVE's pre-start hook refuses to start a CT whose rootfs storage lacks
+`rootdir`, and lxc swallows the real error message. This happens when someone
+edits the storage's Content setting after containers were created on it:
+
+```bash
+pvesm set <storeid> --content images,rootdir
+```
+
+The iSCSI login and filesystem underneath are typically fine; re-adding the
+content type and starting again is sufficient.
+
 ### `QuantaStor: no password configured for storage 'X' on node 'Y'`
 
 Surfaced by 0.2.0 and later in exactly the situation
@@ -336,8 +450,12 @@ because the plugin declares `api()=13` for 9.1 compatibility. See
 
 Hard-block — the plugin's declared API version is higher than your PVE
 version supports, so PVE refuses to load it. The storage type `quantastor`
-will not appear in `pvesm` or the UI. Resolution: ensure you are on plugin
-0.2.0 or later (where `api()` is 13 for 9.1 compatibility).
+will not appear in `pvesm` or the UI. Resolution:
+
+- **For 9.1.x customers**: ensure you are on plugin 0.2.0 or
+  later (where `api()` was reverted from 14 back to 13).
+- **For 8.4.0 customers**: not supported by this plugin (the archived
+  patch-based alpha, GitHub tag `v0.1-alpha`, was the last to target 8.4).
 
 ### Storage shows `active` on some nodes, `inactive` on others
 
@@ -381,7 +499,7 @@ Common causes:
 ### Unit tests (no appliance required)
 
 ```bash
-cd pve-quantastor-plugin
+cd qs-pve-plugin
 ./t/run_tests.sh
 ```
 
@@ -522,6 +640,49 @@ pvesh get /nodes/<node>/scan/quantastor \
 
 ---
 
+## Roadmap
+
+### Migration tooling
+
+For deployments still running the archived patch-based alpha:
+
+- Script to enumerate volumes under the old `zfs`/`quantastor` storage entry
+- Move VM disk associations to the new `quantastor` storage type non-destructively
+- Restore pristine PVE files: `apt reinstall pve-storage pve-manager`
+
+---
+
+## Contributing
+
+### Prerequisites
+
+- Perl 5.30+
+- `libwww-perl`, `liburi-perl` (LWP + URI::Escape)
+- `open-iscsi` (for iSCSI tests on a real host)
+- A QuantaStor appliance or VM for integration testing
+
+### Running the test suite before submitting
+
+```bash
+./t/run_tests.sh
+```
+
+All 157 unit tests must pass with no warnings. New functionality should include corresponding
+tests in the relevant test file (`t/01-api-client.t`, `t/02-iscsi-manager.t`, or `t/04-plugin.t`).
+`t/05-no-ticket-refs.t` guards the documentation rule below.
+
+- Do not reference internal ticket IDs, issue-tracker links, or working dates in tracked
+  files — describe the behavior and the release version instead
+  (`t/05-no-ticket-refs.t` enforces this).
+
+### Adding a new QuantaStor API method
+
+1. Add the method to `src/perl5/PVE/Storage/QuantaStor/APIClient.pm` following the existing pattern
+2. Add unit tests covering the happy path, parameter validation, and at least one error path
+3. Update the method table in this README
+
+---
+
 ### `PVE::Storage::Custom::QuantaStor`
 
 The top-level PVE storage plugin. Inherits from `PVE::Storage::Plugin` and wires
@@ -634,7 +795,7 @@ outside the range `[APIVER - APIAGE, APIVER]`. The plugin currently declares
 |---|---|---|---|
 | **9.2.x** | 14 | ✓ loads, cosmetic "older storage API" warning | Full lifecycle validated (create → snapshot → rollback → resize → destroy). Warning is informational; see [Known Limitations](#older-storage-api-warning-on-pve-92). |
 | **9.1.x** | 13 | ✓ loads silently (exact match) | Validated against 9.1.1 in a 2-node cluster with 9.2. Full lifecycle. |
-| **8.4.0** | 11 | ✗ hard-blocked: `implements newer than current (13 > 11)` | Not supported by this plugin. |
+| **8.4.0** | 11 | ✗ hard-blocked: `implements newer than current (13 > 11)` | Not supported by this plugin (the archived patch-based alpha, GitHub tag `v0.1-alpha`, was the last to target 8.4). |
 | **Future PVE (APIVER ≥ 18)** | ≥18 | ✗ hard-blocked: `API version too old` | Plugin will need to bump `api()` once `APIVER - APIAGE > 13`. Currently APIAGE=5, so this isn't an issue until APIVER reaches 18 (likely PVE 10.x+). |
 
 ### Mixed-version cluster guidance
@@ -662,97 +823,6 @@ on those nodes. **Existing storage entries in `storage.cfg` are not removed**
 when this happens, but any plugin operation on those nodes (status,
 activate, free_image) errors out. Recovery is either to upgrade PVE on the
 affected nodes or downgrade the plugin.
-
----
-
-## Roadmap
-
-### ~~Phase 3 — `QuantaStorPlugin.pm`~~ ✅ Complete
-
-All PVE storage hooks implemented and unit tested (55 tests). Full VM lifecycle validated
-on live PVE 9.1.x / 9.2.x + QuantaStor: create → snapshot → rollback → resize → template → clone. Two-node cluster migration validated.
-
-### ~~Phase 4 — Packaging~~ ✅ Complete
-
-Debian package `pve-storage-quantastor_0.2.1-1_all.deb` builds cleanly with `dpkg-buildpackage`
-and installs successfully on PVE 9.1.1. Plugin lives in `/usr/share/perl5/PVE/Storage/Custom/`
-(PVE's auto-discovery path for third-party plugins). `postinst` restarts PVE services and
-registers dpkg triggers so the UI panel and pool-scan endpoint survive future `pve-manager`
-and `pve-storage` upgrades automatically. `prerm` warns if active storage entries exist.
-Build via `bash build-deb.sh`.
-
-### ~~Phase 5 — UI enhancements~~ ✅ Complete
-
-The `quantastor` type is fully integrated into the PVE web UI with a dedicated
-two-column input panel (General + Advanced tabs).
-
-**Add dialog UX (v0.2):**
-- **Storage ID** auto-fills with the first available `qs-storage-N`, incrementing
-  past any names already taken in the cluster.
-- **Pool field** is a combobox with a scan trigger (🔍). Clicking it calls
-  `GET /nodes/<node>/scan/quantastor` with the credentials already entered,
-  contacts the QuantaStor appliance, and populates a dropdown of active pools.
-  The field remains editable for manual entry if the scan isn't needed.
-- **Content type** is locked to `Disk image` — the selector shows only the
-  supported type so users can't accidentally select Container or Backup.
-
-**Deployment:**
-- JS ships as `/usr/share/pve-manager/js/quantastor-storage.js`, injected into
-  `index.html.tpl` by `postinst`. A dpkg file trigger re-injects after
-  `pve-manager` upgrades.
-- Pool scan endpoint ships as `PVE::API2::Storage::QuantaStorScan`, appended to
-  `PVE::API2::Storage::Scan` by `postinst`. A dpkg file trigger re-injects after
-  `pve-storage` upgrades.
-- Both injections are removed cleanly by `prerm` on uninstall.
-
-### Phase 6 — Migration tooling
-
-For any deployments still running a legacy patch-based QuantaStor integration:
-
-- Script to enumerate volumes under the old `zfs`/`quantastor` storage entry
-- Move VM disk associations to the new `quantastor` storage type non-destructively
-- Restore pristine PVE files: `apt reinstall pve-storage pve-manager`
-
-### Phase 7 — Container storage support (`rootdir`)
-
-Extend the plugin to support LXC container root filesystems in addition to VM disks.
-
-- Add `rootdir` to `plugindata` content types alongside `images`
-- Each LXC container would receive a dedicated thin-provisioned iSCSI LUN (same
-  provisioning model as VM disks)
-- Requires formatting the LUN with an appropriate filesystem and mounting it for
-  the container — more involved than VM disk support where QEMU handles the block
-  device directly
-- Update UI panel to allow `Container` content type selection
-- Validate with LXC container create / start / stop / destroy lifecycle on PVE
-
----
-
-## Contributing
-
-### Prerequisites
-
-- Perl 5.30+
-- `libwww-perl`, `liburi-perl` (LWP + URI::Escape)
-- `open-iscsi` (for iSCSI tests on a real host)
-- A QuantaStor appliance or VM for integration testing
-
-### Running the test suite before submitting
-
-```bash
-./t/run_tests.sh
-```
-
-All 143 unit tests must pass with no warnings. New functionality should include corresponding
-tests in the relevant test file (`t/01-api-client.t`, `t/02-iscsi-manager.t`, or `t/04-plugin.t`).
-
-### Adding a new QuantaStor API method
-
-1. Add the method to `src/perl5/PVE/Storage/QuantaStor/APIClient.pm` following the existing pattern
-2. Add unit tests covering the happy path, parameter validation, and at least one error path
-3. Update the method table in this README
-
----
 
 ## License
 

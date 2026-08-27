@@ -186,8 +186,11 @@ Ext.define('PVE.storage.QuantaStorInputPanel', {
 	    {
 		xtype: 'pveContentTypeSelector',
 		name: 'content',
-		value: 'images',
-		cts: ['images'],
+		// Match RBDInputPanel: multi-select with both types preselected —
+		// without multiSelect the dropdown forces an either/or choice.
+		value: ['images', 'rootdir'],
+		multiSelect: true,
+		cts: ['images', 'rootdir'],
 		fieldLabel: gettext('Content'),
 		allowBlank: false,
 	    },

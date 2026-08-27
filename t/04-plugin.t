@@ -108,9 +108,12 @@ subtest 'type returns quantastor' => sub {
     is $CLASS->type(), 'quantastor', 'type is quantastor';
 };
 
-subtest 'plugindata declares images content' => sub {
+subtest 'plugindata declares images and rootdir content' => sub {
     my $pd = $CLASS->plugindata();
-    ok $pd->{content}[0]{images}, 'images content type declared';
+    ok $pd->{content}[0]{images},  'images content type supported (VM disks)';
+    ok $pd->{content}[0]{rootdir}, 'rootdir content type supported (LXC containers)';
+    ok $pd->{content}[1]{images},  'images is the default content type';
+    ok !$pd->{content}[1]{rootdir}, 'rootdir is not a default content type';
     ok $pd->{'sensitive-properties'}{password}, 'password marked sensitive';
 };
 
@@ -497,6 +500,21 @@ subtest 'alloc_image creates volume and returns volname' => sub {
 
             my $params = $ua->params_for('storageVolumeCreate');
             is $params->{provisionableId}, $POOL_UUID, 'pool UUID passed (qs- stripped)';
+            is $params->{thinProvisioned}, 'true', 'thin provisioned by default (sparse unset)';
+        }
+    );
+};
+
+subtest 'alloc_image honors sparse 0 (thick provisioning opt-out)' => sub {
+    with_mocks(
+        { storageVolumeCreate => { id => $VOL_UUID, name => 'vm-100-disk-0' } },
+        {},
+        sub {
+            my ($ua) = @_;
+            my $scfg = { %{ make_scfg() }, sparse => 0 };
+            $CLASS->alloc_image('qs1', $scfg, 100, 'raw', undef, 10240);
+            my $params = $ua->params_for('storageVolumeCreate');
+            is $params->{thinProvisioned}, 'false', 'thick provisioning requested';
         }
     );
 };
@@ -532,6 +550,98 @@ subtest 'free_image logs out and deletes volume with cascade+force' => sub {
             my $p = $ua->params_for('storageVolumeDelete');
             is $p->{deleteOptions}, 4, 'cascade requested by free_image';
             is $p->{flags},         2, 'force requested by free_image';
+        }
+    );
+};
+
+subtest 'free_image falls back to per-snapshot delete when cascade fails' => sub {
+    # Older QuantaStor builds (observed on 7.0.0.156) fail the cascade delete
+    # on a child snapshot (err=493 DELETE_ZVOL_FAILED) after the volume has
+    # been exported over iSCSI, yet deleting the same snapshots individually
+    # succeeds — so free_image must not give up on the first cascade failure.
+    my $delete_calls = 0;
+    with_mocks(
+        {
+            storageVolumeGet => {
+                id  => $VOL_UUID,
+                iqn => $VOL_IQN,
+                snapshotIdList => ['snap-uuid-1', 'snap-uuid-2'],
+            },
+            hostGet                     => { id => $HOST_UUID },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            storageVolumeDelete         => sub {
+                return { RestError => 'WebFault: Failed to delete storage volume [err=493]' }
+                    if ++$delete_calls == 1;
+                return { status => 'ok' };
+            },
+        },
+        { 'node --logout' => '', 'session' => { _error => 'no sessions' } },
+        sub {
+            my ($ua, $runner) = @_;
+            $CLASS->free_image('qs1', make_scfg(), 'vm-100-disk-0', 0);
+            is $delete_calls, 4, 'cascade attempt + 2 snapshots + volume retry';
+
+            my @del = grep { m{/qstorapi/storageVolumeDelete\?} } @{ $ua->requests_made };
+            like $del[1], qr/storageVolumeList=snap-uuid-1/,   'first snapshot deleted individually';
+            like $del[2], qr/storageVolumeList=snap-uuid-2/,   'second snapshot deleted individually';
+            like $del[3], qr/storageVolumeList=\Q$VOL_UUID\E/, 'volume delete retried after snapshots';
+            like $del[3], qr/deleteOptions=4/,                 'retry still requests cascade';
+        }
+    );
+};
+
+subtest 'free_image fallback tolerates snapshots the cascade already deleted' => sub {
+    # A failed cascade may have partially completed: children removed, parent
+    # refused (seen on 7.0.0.527 — parent zvol briefly busy after target
+    # teardown). The per-snapshot pass must skip not-found and still retry
+    # the parent instead of dying on the already-deleted snapshot.
+    my $delete_calls = 0;
+    with_mocks(
+        {
+            storageVolumeGet => {
+                id  => $VOL_UUID,
+                iqn => $VOL_IQN,
+                snapshotIdList => ['snap-uuid-1'],
+            },
+            hostGet                     => { id => $HOST_UUID },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            storageVolumeDelete         => sub {
+                my ($params) = @_;
+                $delete_calls++;
+                return { RestError => 'WebFault: Failed to delete storage volume [err=493]' }
+                    if $delete_calls == 1;
+                return { RestError => 'WebFault: Specified StorageVolume object snap-uuid-1 could not be found. [err=5]' }
+                    if $params->{storageVolumeList} eq 'snap-uuid-1';
+                return { status => 'ok' };
+            },
+        },
+        { 'node --logout' => '', 'session' => { _error => 'no sessions' } },
+        sub {
+            my ($ua) = @_;
+            my $ret = eval { $CLASS->free_image('qs1', make_scfg(), 'vm-100-disk-0', 0); 1 };
+            ok $ret, 'free_image succeeds despite already-gone snapshot' or diag $@;
+            is $delete_calls, 3, 'cascade + not-found snapshot + parent retry';
+        }
+    );
+};
+
+subtest 'free_image rethrows cascade failure when volume has no snapshots' => sub {
+    # A cascade failure on a snapshotless volume is a different problem —
+    # falling back would just repeat the same doomed delete, so propagate it.
+    with_mocks(
+        {
+            storageVolumeGet            => { id => $VOL_UUID, iqn => $VOL_IQN },
+            hostGet                     => { id => $HOST_UUID },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            storageVolumeDelete         => { RestError => 'WebFault: pool offline [err=42]' },
+        },
+        { 'node --logout' => '', 'session' => { _error => 'no sessions' } },
+        sub {
+            my ($ua) = @_;
+            eval { $CLASS->free_image('qs1', make_scfg(), 'vm-100-disk-0', 0) };
+            like $@, qr/pool offline/, 'original delete error propagated';
+            is scalar(grep { m{/qstorapi/storageVolumeDelete\?} } @{ $ua->requests_made }), 1,
+                'no retry attempted without snapshots';
         }
     );
 };
@@ -631,6 +741,74 @@ subtest 'activate_volume grants ACL and logs in' => sub {
             my $p = $ua->params_for('storageVolumeAclAddRemoveEx');
             is $p->{modType}, 0, 'modType=0 (add)';
             ok $runner->was_called('node --login'), 'iSCSI login called';
+        }
+    );
+};
+
+# A freshly cloned volume can exist before SCST has created its iSCSI target, so
+# the ACL add comes back 5xx ("interrupted by signal") and the clone dies. The
+# add is idempotent, so it is retried; non-5xx must still fail fast.
+subtest 'activate_volume retries ACL add through a transient 5xx' => sub {
+    my $calls = 0;
+    with_mocks(
+        {
+            storageVolumeGet            => { id => $VOL_UUID, iqn => $VOL_IQN },
+            storageVolumeAclAddRemoveEx => sub {
+                return { _http_error => '500 Internal Server Error' } if ++$calls == 1;
+                return { status => 'ok' };
+            },
+        },
+        { 'discovery' => '', 'node --login' => '' },
+        sub {
+            my ($ua, $runner) = @_;
+            local $PVE::Storage::Custom::QuantaStor::ACL_ADD_RETRY_SECS = 0;
+            $CLASS->activate_volume('qs1', make_scfg(), 'vm-100-disk-0', undef, {});
+            is $calls, 2, 'retried once after the transient 5xx';
+            ok $runner->was_called('node --login'), 'login proceeded after the retry';
+        }
+    );
+};
+
+subtest 'activate_volume does not retry a non-5xx ACL failure' => sub {
+    my $calls = 0;
+    with_mocks(
+        {
+            storageVolumeGet            => { id => $VOL_UUID, iqn => $VOL_IQN },
+            storageVolumeAclAddRemoveEx => sub {
+                $calls++;
+                return { RestError => 'Authentication check failed [err=26]' };
+            },
+        },
+        { 'discovery' => '', 'node --login' => '' },
+        sub {
+            my ($ua, $runner) = @_;
+            local $PVE::Storage::Custom::QuantaStor::ACL_ADD_RETRY_SECS = 0;
+            eval { $CLASS->activate_volume('qs1', make_scfg(), 'vm-100-disk-0', undef, {}) };
+            like $@, qr/Authentication check failed/, 'auth error surfaces as-is';
+            is $calls, 1, 'failed fast — no retry burned on a non-transient error';
+            ok !$runner->was_called('node --login'), 'did not attempt login';
+        }
+    );
+};
+
+subtest 'activate_volume gives up after the retry budget' => sub {
+    my $calls = 0;
+    with_mocks(
+        {
+            storageVolumeGet            => { id => $VOL_UUID, iqn => $VOL_IQN },
+            storageVolumeAclAddRemoveEx => sub {
+                $calls++;
+                return { _http_error => '500 Internal Server Error' };
+            },
+        },
+        { 'discovery' => '', 'node --login' => '' },
+        sub {
+            no warnings 'once';   # fully-qualified knob referenced once here
+            local $PVE::Storage::Custom::QuantaStor::ACL_ADD_RETRY_SECS = 0;
+            local $PVE::Storage::Custom::QuantaStor::ACL_ADD_ATTEMPTS   = 3;
+            eval { $CLASS->activate_volume('qs1', make_scfg(), 'vm-100-disk-0', undef, {}) };
+            like $@, qr/HTTP 500/, 'surfaces the final error';
+            is $calls, 3, 'stopped at the configured attempt budget';
         }
     );
 };
@@ -984,6 +1162,36 @@ subtest 'create_base renames volume and takes template snapshot' => sub {
     );
 };
 
+subtest 'create_base outlasts slow QuantaStor session GC (waits past 30s)' => sub {
+    # The server-side session tracker has been measured taking 20s-2min to GC
+    # a logged-out session; with the old 30s default wait, `pct template` right
+    # after `pct stop` failed flakily. create_base now waits up to 120s.
+    my $enum_calls = 0;
+    with_mocks(
+        {
+            storageVolumeGet            => { id => $VOL_UUID, iqn => $VOL_IQN },
+            hostGet                     => { id => $HOST_UUID },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            storageVolumeModify         => { id => $VOL_UUID, iqn => 'iqn.2009-10.com.osnexus:pool:base-100-disk-0' },
+            storageVolumeSnapshot       => { id => 'tmpl-snap-uuid' },
+            sessionEnum                 => sub {
+                return ++$enum_calls <= 50 ? [ { id => 'lingering-session' } ] : [];
+            },
+        },
+        {
+            'node --logout' => '',
+            'session'       => { _error => 'no sessions' },
+            'discovery'     => '',
+            'node --login'  => '',
+        },
+        sub {
+            my $result = $CLASS->create_base('qs1', make_scfg(), 'vm-100-disk-0');
+            is $result, 'base-100-disk-0', 'conversion succeeded despite ~50s of lingering session';
+            ok $enum_calls > 30, "kept polling past the old 30s default ($enum_calls polls)";
+        }
+    );
+};
+
 subtest 'clone_image clones template snapshot and logs in' => sub {
     my $clone_iqn = 'iqn.2009-10.com.osnexus:pool:vm-101-disk-0';
     with_mocks(
@@ -1029,6 +1237,39 @@ subtest 'volume_has_feature clone only on base' => sub {
 
 subtest 'storage_can_replicate returns 0' => sub {
     is $CLASS->storage_can_replicate(make_scfg(), 'qs1', 'raw'), 0, 'no replication';
+};
+
+# ---------------------------------------------------------------------------
+# 13. Container (LXC) rootdir support
+# ---------------------------------------------------------------------------
+
+subtest 'volume_snapshot_needs_fsfreeze returns 1' => sub {
+    # CT rootfs is a live ext4 on the LUN; PVE must freeze it before we snapshot
+    # the QuantaStor volume so the snapshot is filesystem-consistent (as RBD does).
+    is $CLASS->volume_snapshot_needs_fsfreeze(), 1, 'fsfreeze required before snapshot';
+};
+
+subtest 'container rootfs volume is handled like a raw VM disk' => sub {
+    # A container's root filesystem lives on the same raw vm-<vmid>-disk-N LUN
+    # shape as a VM disk (no subvol-* / format subvol for block storage), so it
+    # flows through the identical parse/alloc/feature paths.
+    my @r = $CLASS->parse_volname('vm-200-disk-0');
+    is $r[0], 'images', 'CT rootfs parses with the images vtype (raw block volume)';
+    is $r[6], 'raw',    'CT rootfs format is raw';
+
+    ok $CLASS->volume_has_feature(make_scfg(), 'snapshot', 'qs1', 'vm-200-disk-0'),
+        'snapshot supported on a CT rootfs volume';
+
+    with_mocks(
+        { storageVolumeCreate => { id => $VOL_UUID, name => 'vm-200-disk-0' } },
+        {},
+        sub {
+            my ($ua) = @_;
+            my $name = $CLASS->alloc_image('qs1', make_scfg(), 200, 'raw', undef, 8192);
+            like $name, qr/^vm-200-disk-/, 'alloc_image creates a raw CT rootfs LUN';
+            ok $ua->was_called('storageVolumeCreate'), 'create API called for CT rootfs';
+        }
+    );
 };
 
 # ---------------------------------------------------------------------------

@@ -110,15 +110,16 @@ sub _ua {
     # Send HTTP Basic credentials PREEMPTIVELY on every request, rather than
     # via $ua->credentials() (challenge-response). QuantaStor's REST endpoints
     # do not reliably issue a 401 WWW-Authenticate Basic challenge — some
-    # versions answer an unauthenticated request with an "[err=26] Authentication
-    # check failed" body under HTTP 200 instead — and $ua->credentials() only
-    # attaches the Authorization header if BOTH the netloc AND the realm string
-    # in that challenge match. When no challenge arrives (or the realm differs
-    # across QuantaStor versions), LWP silently sends no credentials and the
-    # appliance returns err=26 — indistinguishable from a wrong password even
-    # when the password is correct (verifiable via `curl -u`, which also sends
-    # Basic preemptively). Setting the header directly removes all dependence on
-    # the challenge and realm.
+    # versions answer an unauthenticated request with an err=26 body under
+    # HTTP 200 instead — and $ua->credentials() only attaches the Authorization
+    # header if BOTH the netloc AND the realm string in that challenge match.
+    # When no challenge arrives (or the realm differs across QuantaStor
+    # versions), LWP silently sends no credentials and the appliance returns
+    # "[err=26] Authentication check failed" — indistinguishable from a wrong
+    # password, even though the password is correct (verifiable via `curl -u`,
+    # which also sends Basic preemptively). Setting the header directly removes
+    # all dependence on the challenge and realm; this matches curl and the
+    # legacy LunCmd plugin, both proven against field appliances.
     my $token = encode_base64("$self->{username}:$self->{password}", '');
     $ua->default_header('Authorization' => "Basic $token");
 
@@ -296,7 +297,8 @@ sub _volume_get_by_pool_name {
 Creates a new volume. C<$size_kb> is in kilobytes (the API expects bytes;
 this method performs the conversion). Returns the new volume object.
 
-Optional: C<description>.
+Optional: C<description>, C<thin> (default 1 — thin provisioned; pass 0 for
+a fully reserved volume).
 
 =cut
 
@@ -306,10 +308,13 @@ sub volume_create {
     croak "volume_create: size_kb is required" unless defined $size_kb && $size_kb > 0;
     croak "volume_create: pool_id is required" unless defined $pool_id && length $pool_id;
 
+    # thinProvisioned must be sent explicitly: an absent boolean is treated as
+    # false by the API, which creates the volume 100% space-reserved (thick).
     return $self->_get('storageVolumeCreate',
         name            => $name,
         size            => $size_kb * 1024,   # KB -> bytes
         provisionableId => $pool_id,
+        thinProvisioned => ($opts{thin} // 1) ? 'true' : 'false',
         description     => $opts{description} // 'Created by Proxmox VE Plugin',
     );
 }
@@ -497,14 +502,22 @@ sub session_enum {
 
 Polls C<session_enum> until QuantaStor reports no active iSCSI sessions on
 C<$vol_name>, or C<$max_wait> seconds elapse. Returns 1 once empty, 0 on
-timeout. Default C<$max_wait> is 30 seconds; polling interval is 1 second.
+timeout. Default C<$max_wait> is 200 seconds; polling interval is 1 second.
 
 This complements ISCSIManager's C<wait_for_logout>: after the PVE-side
 iscsiadm session record is gone, QuantaStor may still consider the session
-active for several seconds while its own GC catches up. Operations like
-volume_rollback and volume_modify reject on an "active session" — call this
-method between the local logout and the server-side mutation to bridge the
-gap.
+active while its own GC catches up. Operations like volume_rollback and
+volume_modify reject on an "active session" — call this method between the
+local logout and the server-side mutation to bridge the gap.
+
+The 200s default is not arbitrary: C<sessionEnum> answers from DB rows that
+only CSessionManager refreshes, and that cycle has a hardcoded 180s floor
+(C<OSN_SESSION_UPDATE_TIMEOUT_MIN>). It cannot be tuned down — appliance
+config values below 60 are silently raised to 180, so the shipped
+C<session_update_timeout_min=20> is misleading. A logged-out session is
+therefore still reported active for up to ~180s (measured: 179s). Anything
+shorter makes rollback fail *deterministically* rather than occasionally, and
+the failed PVE task leaves a lock that blocks every later start.
 
 =cut
 
@@ -512,7 +525,7 @@ sub wait_for_session_gone {
     my ($self, $vol_name, $max_wait) = @_;
     croak "wait_for_session_gone: vol_name is required"
         unless defined $vol_name && length $vol_name;
-    $max_wait //= 30;
+    $max_wait //= 200;   # must exceed QS's 180s session-manager cycle; see POD
 
     my $interval = 1;
     my $elapsed  = 0;
