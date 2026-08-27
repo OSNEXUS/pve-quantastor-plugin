@@ -18,7 +18,7 @@ if (eval { require PVE::SafeSyslog; 1 }) {
     $_syslog_fn = \&PVE::SafeSyslog::syslog;
 }
 
-our $VERSION = '0.2.1';
+our $VERSION = '1.0.0';
 
 =head1 NAME
 
@@ -63,6 +63,11 @@ sub api { return 13 }
 my $MAX_LUNS_PER_VM = 1024;
 my $DEFAULT_API_PORT = 8153;
 my $SNAP_SEP = '_';   # separator between volume name and snapshot name
+
+# Retry budget for the clone/activate ACL race (see activate_volume).
+# Package vars so tests can localize them to keep the suite fast.
+our $ACL_ADD_ATTEMPTS   = 5;
+our $ACL_ADD_RETRY_SECS = 3;
 
 # ---------------------------------------------------------------------------
 # Password file helpers
@@ -148,14 +153,23 @@ sub type { return 'quantastor' }
 
 =head2 plugindata
 
-Declares supported content types (VM images only) and marks C<password> as
-a sensitive property so PVE stores it encrypted.
+Declares supported content types and marks C<password> as a sensitive
+property so PVE stores it encrypted.
+
+Supports C<images> (VM disks) and C<rootdir> (LXC container root filesystems).
+Both live on the same QuantaStor iSCSI LUN as a raw block volume
+(C<vm-E<lt>vmidE<gt>-disk-N>); for a container PVE lays an ext4 filesystem on
+that block device and mounts it (the C<mkfs>/mount/C<resize2fs> live in
+C<PVE::LXC>, not here). The default stays C<images>. This mirrors C<RBDPlugin>
+(network block + rootdir). C<vztmpl> is intentionally unsupported: template
+tarballs need a POSIX filesystem a raw LUN can't provide, so CT templates come
+from C<local> (same as RBD).
 
 =cut
 
 sub plugindata {
     return {
-        content              => [{ images => 1 }, { images => 1 }],  # [supported, default]
+        content              => [{ images => 1, rootdir => 1 }, { images => 1 }],  # [supported, default]
         'sensitive-properties' => { password => 1 },
     };
 }
@@ -170,7 +184,8 @@ storage editor UI and are stored in C</etc/pve/storage.cfg>.
 sub properties {
     # Only declare properties that are NOT already registered by built-in PVE
     # plugins.  portal/blocksize/sparse are owned by ISCSIPlugin/ZFSPoolPlugin
-    # and must not be re-declared.
+    # and must not be re-declared.  Note: sparse IS honored by this plugin
+    # (see alloc_image), but unlike ZFSPoolPlugin it defaults to ON.
     return {
         api_host => {
             description => 'QuantaStor appliance IP address or hostname',
@@ -549,7 +564,28 @@ sub activate_volume {
         unless defined $vol->{iqn} && length $vol->{iqn};
 
     # Grant access then login — order matters.
-    $client->volume_acl_add($vol->{id}, $iqn);
+    #
+    # QuantaStor can return a freshly cloned volume before SCST has created its
+    # iSCSI target (clone is served by an async ZFS "instant replica"), and the
+    # ACL add then fails with a transient 5xx — observed as
+    # "HTTP 500 interrupted by signal" — killing an otherwise-healthy clone.
+    # Retrying is safe because an ACL add for a host that already has access is
+    # a no-op. Anything that is not a 5xx (auth, not-found) is a real error and
+    # must still fail immediately rather than stalling for the whole budget.
+    my $acl_added = 0;
+    my $acl_err;
+    for my $attempt (1 .. $ACL_ADD_ATTEMPTS) {
+        eval { $client->volume_acl_add($vol->{id}, $iqn) };
+        if (!$@) { $acl_added = 1; last }
+        $acl_err = $@;
+        die $acl_err unless $acl_err =~ /HTTP 5\d\d/;
+        _logger($storeid)->(warning =>
+            "activate_volume: ACL add for '$name' failed (attempt $attempt/"
+          . "$ACL_ADD_ATTEMPTS), retrying: $acl_err");
+        sleep $ACL_ADD_RETRY_SECS if $attempt < $ACL_ADD_ATTEMPTS;
+    }
+    die $acl_err unless $acl_added;
+
     $iscsi->login($vol->{iqn});
 
     # Wait for the by-path symlink before returning. PVE expects activate_volume
@@ -606,6 +642,9 @@ sub deactivate_volume {
 Creates a new volume in QuantaStor.  C<$size> is in kilobytes (PVE convention).
 Returns the volname (not the full volid).
 
+Volumes are thin provisioned unless C<sparse 0> is set in the storage
+configuration (the C<sparse> option defaults to on for this plugin).
+
 =cut
 
 sub alloc_image {
@@ -622,7 +661,8 @@ sub alloc_image {
     my $client   = _client($scfg, $storeid);
     my $pool_raw = _raw_pool_id($scfg->{pool_id});
 
-    $client->volume_create($name, $size, $pool_raw);
+    # Default to thin; 'sparse 0' in storage.cfg opts into thick (100% reserved).
+    $client->volume_create($name, $size, $pool_raw, thin => $scfg->{sparse} // 1);
 
     return $name;
 }
@@ -661,7 +701,30 @@ sub free_image {
 
     # Force-delete + cascade so snapshots of this volume go too. PVE expects
     # free_image to leave nothing behind for this volname.
-    $client->volume_delete($vol->{id}, delete_options => 4, flags => 2);
+    eval { $client->volume_delete($vol->{id}, delete_options => 4, flags => 2) };
+    if (my $err = $@) {
+        # QuantaStor can refuse zvol deletes (err=493 DELETE_ZVOL_FAILED) for a
+        # window after target teardown — brief on current builds, minutes-long
+        # for fresh snapshot/clone zvols on older ones (observed on 7.0.0.156).
+        # The failed cascade may also have PARTIALLY completed (snapshots gone,
+        # parent refused), so the per-snapshot cleanup must tolerate objects
+        # that no longer exist before retrying the parent.
+        my $snaps = $vol->{snapshotIdList};
+        die $err unless ref $snaps eq 'ARRAY' && @$snaps;
+        warn "free_image: cascade delete of '$volname' failed, retrying with "
+           . scalar(@$snaps) . " individual snapshot delete(s): $err";
+        for my $snap_id (@$snaps) {
+            eval { $client->volume_delete($snap_id, flags => 2) };
+            die $@ if $@ && $@ !~ /could not be found/i;
+        }
+        my $deleted = 0;
+        for my $attempt (1 .. 3) {
+            eval { $client->volume_delete($vol->{id}, delete_options => 4, flags => 2) };
+            if (!$@) { $deleted = 1; last }
+            sleep 10 if $attempt < 3;   # ride out the post-teardown busy window
+        }
+        die $@ unless $deleted;
+    }
     return undef;
 }
 
@@ -876,7 +939,11 @@ sub create_base {
     # mutating the volume — rename rejects on an active session. If it never
     # clears (another node may still hold the volume), fail with an actionable
     # message rather than proceeding into a rename that QS rejects with [err=76]
-    # and leaving the volume half-converted.
+    # and leaving the volume half-converted. Use the client default (200s): it
+    # already exceeds QS's 180s session-manager cycle, which the previous
+    # explicit 120s here did not — template conversion failed whenever the
+    # cycle had not ticked. Template conversion is rare and interactive-retry
+    # is worse than waiting.
     unless ($client->wait_for_session_gone($name)) {
         die "QuantaStor create_base: volume '$name' still has an active session "
           . "after waiting — another node may have it open. Ensure the VM is "
@@ -948,6 +1015,9 @@ Declares which PVE features this plugin supports.
 sub volume_has_feature {
     my ($class, $scfg, $feature, $storeid, $volname, $snapname, $running) = @_;
 
+    # Keyed on volume role (current/snap/base) derived from the name, not on
+    # content type: container rootfs volumes are the same raw vm-/base- shape
+    # as VM disks, so they inherit the same snapshot/clone/template/copy support.
     my $features = {
         snapshot  => { current => 1, snap => 1 },
         clone     => { base    => 1 },
@@ -974,6 +1044,23 @@ Returns 0 — replication is not supported in this release.
 sub storage_can_replicate {
     my ($class, $scfg, $storeid, $format) = @_;
     return 0;
+}
+
+=head2 volume_snapshot_needs_fsfreeze
+
+Returns 1 so PVE freezes a container's root filesystem before snapshotting.
+
+An LXC container's rootfs is a live ext4 mounted on the iSCSI LUN, so a
+QuantaStor volume snapshot taken while it is mounted would otherwise capture a
+crash-consistent (dirty) filesystem. Freezing first makes the snapshot
+filesystem-consistent. Same rationale as C<RBDPlugin::volume_snapshot_needs_fsfreeze>.
+(The base plugin returns 0, which is correct only for raw VM disks that the
+guest OS quiesces itself.)
+
+=cut
+
+sub volume_snapshot_needs_fsfreeze {
+    return 1;
 }
 
 1;

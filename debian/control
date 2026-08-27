@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: OSNexus <support@osnexus.com>
 Build-Depends: debhelper-compat (= 13)
 Standards-Version: 4.6.0
-Homepage: https://github.com/osnexus/quantastor-pve-plugin
+Homepage: https://github.com/OSNEXUS/pve-quantastor-plugin
 
 Package: pve-storage-quantastor
 Architecture: all

@@ -113,8 +113,8 @@ subtest 'ca_cert path enables verification with custom CA' => sub {
 # Regression guard: the client MUST attach an Authorization: Basic header to
 # every request up front rather than relying on $ua->credentials()
 # challenge-response, which silently sends nothing when QuantaStor issues no
-# 401 challenge (or one whose realm doesn't match) — surfacing as a misleading
-# "[err=26] Authentication check failed" despite correct credentials.
+# 401 challenge (or one whose realm != the hardcoded string) — surfacing as a
+# misleading [err=26] Authentication check failed despite correct creds.
 # ---------------------------------------------------------------------------
 
 subtest 'preemptive Authorization: Basic header is set on the real UA' => sub {
@@ -321,7 +321,17 @@ subtest 'volume_create sends correct params' => sub {
     is $params->{name},            'vm-100-disk-0',        'name param';
     is $params->{size},            10240 * 1024,           'size converted KB->bytes';
     is $params->{provisionableId}, 'pool-uuid',            'pool param';
+    is $params->{thinProvisioned}, 'true',                 'thin provisioned by default';
     like $params->{description},   qr/Proxmox/,            'description set';
+};
+
+subtest 'volume_create with thin => 0 requests thick provisioning' => sub {
+    my ($client, $ua) = make_client(
+        storageVolumeCreate => { id => 'x', name => 'vol' },
+    );
+    $client->volume_create('vol', 1024, 'pool', thin => 0);
+    my $params = $ua->params_for('storageVolumeCreate');
+    is $params->{thinProvisioned}, 'false', 'thick provisioning requested';
 };
 
 subtest 'volume_create requires name' => sub {
@@ -495,6 +505,26 @@ subtest 'wait_for_session_gone returns 0 on timeout' => sub {
         _ua  => $ua, _sleep => sub { },
     );
     is $client->wait_for_session_gone('vm-100-disk-0', 2), 0, 'returns 0 after timeout';
+};
+
+# Regression guard: QuantaStor's session view is refreshed by CSessionManager on
+# a cycle with a hardcoded 180s floor, so a default shorter than that made
+# rollback/create_base fail deterministically. Assert the property (outlasts the
+# cycle), not the literal constant.
+subtest 'wait_for_session_gone default budget outlasts the 180s QS cycle' => sub {
+    my $ua = Test::QuantaStor::MockUA->new(responses => {
+        sessionEnum => [ { id => 'session-uuid', initiatorIqn => 'iqn.foo' } ],
+    });
+    my $client = PVE::Storage::QuantaStor::APIClient->new(
+        host => '10.0.0.1', username => 'admin', password => 'x',
+        _ua  => $ua, _sleep => sub { },
+    );
+    is $client->wait_for_session_gone('vm-100-disk-0'), 0, 'times out when never idle';
+
+    # Poll interval is 1s, so one sessionEnum per second of budget.
+    my $polls = grep { m{/sessionEnum} } @{ $ua->requests_made };
+    cmp_ok $polls, '>', 180,
+        "default budget polls $polls times — past QuantaStor's 180s purge cycle";
 };
 
 subtest 'wait_for_session_gone treats sessionEnum errors as still-active' => sub {

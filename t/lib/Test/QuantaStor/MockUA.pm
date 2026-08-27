@@ -47,6 +47,12 @@ Encoded to JSON and returned as a successful HTTP response.
 
 Simulates an HTTP-level failure (non-2xx status).
 
+=item A coderef
+
+Called with the parsed query parameters as a hashref; its return value is used
+as the response (any of the forms above). Lets a test vary the response per
+call — e.g. fail the first delete and succeed on the retry.
+
 =back
 
 All C<get()> calls are recorded in C<requests_made> for assertion in tests.
@@ -85,6 +91,18 @@ sub get {
             status_line => '404 Not Found',
             content     => '',
         );
+    }
+
+    # Coderef — call with the parsed query params, use its return as the response.
+    if (ref $configured eq 'CODE') {
+        my %params;
+        if ($url =~ m{\?(.+)$}) {
+            for my $pair (split /&/, $1) {
+                my ($k, $v) = map { _urldecode($_) } split /=/, $pair, 2;
+                $params{$k} = $v;
+            }
+        }
+        $configured = $configured->(\%params);
     }
 
     # Explicit HTTP error sentinel.
