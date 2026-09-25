@@ -205,6 +205,11 @@ sub properties {
             description => 'Verify QuantaStor SSL certificate (disable for self-signed certs)',
             type        => 'boolean',
         },
+        multipath => {
+            description => "Use DM-MPIO across all QuantaStor-advertised "
+                . "portals per LUN, passing /dev/mapper/<wwid> to the VM.",
+            type => 'boolean', default => 0,
+        },
     };
 }
 
@@ -230,6 +235,7 @@ sub options {
         content    => { optional => 1 },
         bwlimit    => { optional => 1 },
         shared     => { optional => 1 },   # see on_add_hook for default behavior
+	multipath  => { optional => 1 },
     };
 }
 
@@ -586,17 +592,25 @@ sub activate_volume {
     }
     die $acl_err unless $acl_added;
 
-    $iscsi->login($vol->{iqn});
+    if ($scfg->{multipath}) {
+        $iscsi->login_all($vol->{iqn});
+        my $mapper = $iscsi->wait_for_mapper($vol->{iqn}, 0, 30);
+        die "QuantaStor activate_volume: multipath map for '$vol->{iqn}' didn't "
+          . "appear after 30s — check multipathd + /etc/multipath.conf\n"
+            unless $mapper;
+	} else {
 
-    # Wait for the by-path symlink before returning. PVE expects activate_volume
-    # to leave the device usable; if we return before udev creates the symlink,
-    # QEMU fails to open the disk with a confusing low-level error.
-    unless ($iscsi->wait_for_device($vol->{iqn}, 0)) {
-        my $dev = $iscsi->device_path($vol->{iqn}, 0);
-        die "QuantaStor activate_volume: iSCSI device '$dev' did not appear "
-          . "after 30s — check that iscsid is running and the LUN is exported\n";
+        $iscsi->login($vol->{iqn});
+
+        # Wait for the by-path symlink before returning. PVE expects activate_volume
+        # to leave the device usable; if we return before udev creates the symlink,
+        # QEMU fails to open the disk with a confusing low-level error.
+        unless ($iscsi->wait_for_device($vol->{iqn}, 0)) {
+            my $dev = $iscsi->device_path($vol->{iqn}, 0);
+            die "QuantaStor activate_volume: iSCSI device '$dev' did not appear "
+              . "after 30s — check that iscsid is running and the LUN is exported\n";
+        }
     }
-
     return 1;
 }
 
@@ -624,9 +638,14 @@ sub deactivate_volume {
     my $iqn  = $iscsi->get_initiator_iqn();
     my $host = $client->host_get($iqn);
 
-    # Logout first, then remove ACL — reverse of activate_volume.
-    $iscsi->logout($vol->{iqn});
-    $iscsi->wait_for_logout($vol->{iqn});
+
+    if ($scfg->{multipath}) {
+        $iscsi->logout_all($vol->{iqn});
+    } else {
+        # Logout first, then remove ACL — reverse of activate_volume.
+        $iscsi->logout($vol->{iqn});
+        $iscsi->wait_for_logout($vol->{iqn});
+    }
 
     $client->volume_acl_remove($vol->{id}, $host->{id}) if $host;
 
