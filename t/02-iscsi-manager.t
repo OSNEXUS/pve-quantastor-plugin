@@ -510,6 +510,208 @@ subtest 'logger receives messages during login' => sub {
 };
 
 # ---------------------------------------------------------------------------
+# 9. Multipath
+# ---------------------------------------------------------------------------
+
+my $MP_IQN  = 'iqn.2009-10.com.osnexus:pool:vm-100-disk-0';
+my $MP_WWID = '362000000e773a0fc00fefb16ec9af814';
+
+# Two portals for our target, one for an unrelated target, one IPv6 portal.
+my $SENDTARGETS = join "\n",
+    "10.0.0.1:3260,1 $MP_IQN",
+    "10.0.1.1:3260,1 $MP_IQN",
+    "10.0.0.1:3260,1 iqn.2009-10.com.osnexus:pool:vm-200-disk-0",
+    "[fd00::1]:3260,1 $MP_IQN",
+    '';
+
+sub make_mp_manager {
+    my (%args) = @_;
+    my $runner = Test::QuantaStor::MockCmdRunner->new(responses => $args{responses} // {});
+    my $mgr = PVE::Storage::QuantaStor::ISCSIManager->new(
+        portal       => '10.0.0.1',
+        _run_cmd     => $runner->as_coderef,
+        _sleep       => sub { },
+        _path_exists => $args{path_exists} // sub { 1 },
+        _portal_reachable => $args{reachable} // sub { 1 },
+    );
+    return ($mgr, $runner);
+}
+
+# Portals passed to every 'iscsiadm -m node ... --<action>' call, in order.
+sub portals_for {
+    my ($runner, $action) = @_;
+    my @p;
+    for my $c (@{ $runner->calls_made }) {
+        my @cmd = @{ $c->{cmd} };
+        next unless grep { $_ eq "--$action" } @cmd;
+        for my $i (0 .. $#cmd - 1) { push @p, $cmd[$i + 1] if $cmd[$i] eq '--portal' }
+    }
+    return @p;
+}
+
+subtest 'sessions parses only this target, IPv4 and IPv6' => sub {
+    my ($mgr) = make_mp_manager(responses => { session => join "\n",
+        "tcp: [3] 10.0.0.1:3260,1 $MP_IQN (non-flash)",
+        "tcp: [4] 10.0.0.1:3260,1 iqn.2009-10.com.osnexus:pool:vm-200-disk-0 (non-flash)",
+        "tcp: [7] [fd00::1]:3260,1 $MP_IQN (non-flash)", '' });
+    is_deeply [ $mgr->sessions($MP_IQN) ],
+        [ { sid => 3, portal => '10.0.0.1:3260' }, { sid => 7, portal => '[fd00::1]:3260' } ],
+        'two sessions for the target, unrelated target ignored';
+};
+
+subtest 'sessions returns empty when iscsiadm reports none' => sub {
+    my ($mgr) = make_mp_manager(responses => { session => { _error => 'No active sessions' } });
+    is scalar($mgr->sessions($MP_IQN)), 0, 'no sessions';
+};
+
+subtest 'discover_portals returns every portal for the target only' => sub {
+    my ($mgr) = make_mp_manager(responses => { discovery => $SENDTARGETS });
+    is_deeply [ $mgr->discover_portals($MP_IQN) ],
+        [ '10.0.0.1:3260', '10.0.1.1:3260', '[fd00::1]:3260' ], 'sorted, deduplicated';
+};
+
+subtest 'discover_portals retries, then dies when nothing is advertised' => sub {
+    my ($mgr, $runner) = make_mp_manager(responses => { discovery => '' });
+    eval { $mgr->discover_portals($MP_IQN, tries => 3) };
+    like $@, qr/no portals found/, 'dies';
+    is $runner->call_count_for('discovery'), 3, 'tried 3 times';
+};
+
+subtest 'login_all logs in on every portal' => sub {
+    my ($mgr, $runner) = make_mp_manager(responses => {
+        discovery => $SENDTARGETS, session => { _error => 'No active sessions' } });
+    is $mgr->login_all($MP_IQN), 3, '3 paths up';
+    is_deeply [ sort(portals_for($runner, 'login')) ],
+        [ '10.0.0.1:3260', '10.0.1.1:3260', '[fd00::1]:3260' ], 'one login per portal';
+};
+
+subtest 'login_all is idempotent: skips portals that already have a session' => sub {
+    my ($mgr, $runner) = make_mp_manager(responses => {
+        discovery => $SENDTARGETS,
+        session   => "tcp: [3] 10.0.0.1:3260,1 $MP_IQN (non-flash)\n"
+                   . "tcp: [5] 10.0.1.1:3260,1 $MP_IQN (non-flash)\n"
+                   . "tcp: [7] [fd00::1]:3260,1 $MP_IQN (non-flash)\n",
+    });
+    is $mgr->login_all($MP_IQN), 3, 'all 3 paths counted as up';
+    is scalar(portals_for($runner, 'login')), 0, 'no login issued';
+};
+
+subtest 'login_all succeeds when some paths fail' => sub {
+    my ($mgr, $runner) = make_mp_manager(responses => {
+        discovery      => $SENDTARGETS,
+        session        => { _error => 'No active sessions' },
+        'node --login' => [ { _error => 'iscsiadm: No route to host' }, '', '' ],
+    });
+    is $mgr->login_all($MP_IQN), 2, '2 of 3 paths up';
+};
+
+subtest 'login_all dies when every path fails' => sub {
+    my ($mgr) = make_mp_manager(responses => {
+        discovery      => $SENDTARGETS,
+        session        => { _error => 'No active sessions' },
+        'node --login' => { _error => 'iscsiadm: No route to host' },
+    });
+    eval { $mgr->login_all($MP_IQN) };
+    like $@, qr/all logins failed/, 'dies';
+};
+
+subtest 'login_all skips portals that do not accept a connection' => sub {
+    my ($mgr, $runner) = make_mp_manager(
+        responses => { discovery => $SENDTARGETS, session => { _error => 'No active sessions' } },
+        reachable => sub { $_[0] ne '10.0.1.1:3260' },
+    );
+    is $mgr->login_all($MP_IQN), 2, '2 reachable paths up';
+    is_deeply [ sort(portals_for($runner, 'login')) ], [ '10.0.0.1:3260', '[fd00::1]:3260' ],
+        'no login attempted on the unreachable portal';
+};
+
+subtest 'login_all dies when no portal is reachable' => sub {
+    my ($mgr, $runner) = make_mp_manager(
+        responses => { discovery => $SENDTARGETS, session => { _error => 'No active sessions' } },
+        reachable => sub { 0 },
+    );
+    eval { $mgr->login_all($MP_IQN) };
+    like $@, qr/not reachable/, 'dies naming the cause';
+    is scalar(portals_for($runner, 'login')), 0, 'no login attempted';
+};
+
+subtest 'default reachability probe: listening port yes, closed port no' => sub {
+    require IO::Socket::IP;
+    my $l = IO::Socket::IP->new(LocalHost => '127.0.0.1', LocalPort => 0, Listen => 1)
+        or plan skip_all => "cannot listen: $@";
+    my $port = $l->sockport;
+    ok  PVE::Storage::QuantaStor::ISCSIManager::_default_portal_reachable("127.0.0.1:$port"), 'listening';
+    close $l;
+    ok !PVE::Storage::QuantaStor::ISCSIManager::_default_portal_reachable("127.0.0.1:$port"), 'closed';
+    ok !PVE::Storage::QuantaStor::ISCSIManager::_default_portal_reachable('garbage'), 'unparsable';
+};
+
+subtest 'login_all falls back to single-portal login when discovery fails' => sub {
+    my ($mgr, $runner) = make_mp_manager(responses => {
+        discovery => { _error => 'iscsiadm: connection refused' },
+        session   => [ { _error => 'No active sessions' } ],
+    });
+    ok $mgr->login_all($MP_IQN), 'logged in';
+    is_deeply [ portals_for($runner, 'login') ], [ '10.0.0.1' ], 'configured portal only';
+};
+
+subtest 'logout_all logs out every active session' => sub {
+    my ($mgr, $runner) = make_mp_manager(responses => { session =>
+        "tcp: [3] 10.0.0.1:3260,1 $MP_IQN (non-flash)\ntcp: [5] 10.0.1.1:3260,1 $MP_IQN (non-flash)\n" });
+    $mgr->logout_all($MP_IQN);
+    is_deeply [ portals_for($runner, 'logout') ], [ '10.0.0.1:3260', '10.0.1.1:3260' ],
+        'both sessions logged out, no discovery needed';
+    ok !$runner->was_called('discovery'), 'no discovery';
+};
+
+subtest 'rescan_all rescans each session by id' => sub {
+    my ($mgr, $runner) = make_mp_manager(responses => { session =>
+        "tcp: [3] 10.0.0.1:3260,1 $MP_IQN (non-flash)\ntcp: [5] 10.0.1.1:3260,1 $MP_IQN (non-flash)\n" });
+    is $mgr->rescan_all($MP_IQN), 2, 'two sessions rescanned';
+    ok $runner->was_called('session -r 3 --rescan') && $runner->was_called('session -r 5 --rescan'),
+        'per-session rescan';
+};
+
+subtest 'map_path uses the dm-uuid link (independent of user_friendly_names)' => sub {
+    my ($mgr) = make_mp_manager();
+    is $mgr->map_path($MP_WWID), "/dev/disk/by-id/dm-uuid-mpath-$MP_WWID", 'path';
+};
+
+subtest 'add_map builds only this map and waits for it' => sub {
+    my $n = 0;
+    my ($mgr, $runner) = make_mp_manager(path_exists => sub { ++$n > 3 });
+    ok $mgr->add_map($MP_WWID), 'map appeared';
+    ok $runner->was_called("-a $MP_WWID"), 'wwid whitelisted';
+    ok $runner->was_called($MP_WWID), 'map built for this wwid';
+    ok !$runner->was_called('-r'), 'no host-wide multipath -r';
+};
+
+subtest 'add_map times out' => sub {
+    my ($mgr) = make_mp_manager(path_exists => sub { 0 });
+    is $mgr->add_map($MP_WWID, 3), 0, 'returns 0';
+};
+
+subtest 'flush_map flushes an existing map and dies if it is busy' => sub {
+    my ($mgr, $runner) = make_mp_manager();
+    ok $mgr->flush_map($MP_WWID), 'flushed';
+    ok $runner->was_called("-f $MP_WWID"), 'multipath -f issued';
+
+    my ($busy) = make_mp_manager(responses => { "-f $MP_WWID" => { _error => 'map in use' } });
+    eval { $busy->flush_map($MP_WWID) };
+    like $@, qr/still in use/, 'busy map is fatal';
+
+    my ($none, $r2) = make_mp_manager(path_exists => sub { 0 });
+    ok $none->flush_map($MP_WWID), 'no map: no-op';
+    is $r2->call_count, 0, 'nothing run';
+};
+
+subtest 'resize_map asks multipathd to resize' => sub {
+    my ($mgr, $runner) = make_mp_manager();
+    ok $mgr->resize_map($MP_WWID), 'ok';
+    ok $runner->was_called("resize map $MP_WWID"), 'multipathd resize map';
+};
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 

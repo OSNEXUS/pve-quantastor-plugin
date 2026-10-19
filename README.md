@@ -11,9 +11,9 @@ storage backend for virtual machines and containers.
 | Component | State |
 |---|---|
 | `QuantaStor/APIClient.pm` | Complete — clean REST client, 50 unit tests |
-| `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 42 unit tests |
-| `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 65 unit tests |
-| Debian packaging | Complete — `pve-storage-quantastor_1.0.1-1_all.deb` |
+| `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 61 unit tests |
+| `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 80 unit tests |
+| Debian packaging | Complete — `pve-storage-quantastor_1.1.0-1_all.deb` |
 
 ---
 
@@ -39,7 +39,8 @@ Proxmox VE storage layer (pvedaemon / pvestatd / qm / pct)
         open-iscsi initiator ═══ data plane (guest I/O) ═══► iSCSI target (TCP :3260)
                 │                                            one target per volume, LUN 0
                 ▼
-        /dev/disk/by-path/...    ← stable block device
+        /dev/disk/by-path/...    ← stable block device (multipath: the dm map,
+                                   /dev/disk/by-id/dm-uuid-mpath-<wwid>)
                 │
                 ▼
         QEMU raw VM disk (images) / ext4 container rootfs (rootdir)
@@ -110,7 +111,7 @@ PVE volume names follow the standard Proxmox convention:
 Download the latest `.deb` from the releases page and install it on each PVE node:
 
 ```bash
-dpkg -i pve-storage-quantastor_1.0.1-1_all.deb
+dpkg -i pve-storage-quantastor_1.1.0-1_all.deb
 # PVE services are restarted automatically by postinst
 ```
 
@@ -120,12 +121,28 @@ is refreshed. The package includes two dpkg file triggers: one on `index.html.tp
 `PVE/API2/Storage/Scan.pm` (re-injects the pool-scan API route when `pve-storage` is
 upgraded). No manual reinstall is required after either upgrade.
 
+### Upgrading and downgrading
+
+From 1.0.0 or later, install the current package directly on every node — there
+are no intermediate versions to step through, no migration steps, and existing
+storage entries keep working unchanged. Guests on the storage can keep running
+during the upgrade.
+
+**Downgrading needs one step first if multipath is on.** Older releases do not
+know the `multipath` option. Before installing a 1.0.x package over 1.1.0 or
+later, turn it off on every storage that uses it, with that storage's guests
+stopped:
+
+```bash
+pvesm set <storeid> --delete multipath
+```
+
 ### Upgrading from the patch-based alpha
 
 The archived v0.1 alpha (GitHub tag `v0.1-alpha`) worked by patching Proxmox's own
 storage modules and registered its storage as a `zfs` entry with
 `iscsiprovider quantastor`. Version 1.0.0 replaced that integration entirely and
-1.0.1 is the same first-class plugin, so on any node running 1.0.0 or later:
+1.1.0 is the same first-class plugin, so on any node running 1.0.0 or later:
 
 - **A leftover alpha storage entry is inert.** The Proxmox core patches it relied
   on do not survive a `pve-storage` upgrade, so the entry has no working provider
@@ -179,7 +196,7 @@ systemctl restart pvedaemon pveproxy pvestatd
 apt install debhelper
 
 bash build-deb.sh
-# Produces ../pve-storage-quantastor_1.0.1-1_all.deb
+# Produces ../pve-storage-quantastor_1.1.0-1_all.deb
 ```
 
 ---
@@ -342,6 +359,90 @@ the pool is exported and re-imported. See
 under Known Limitations for the measured behaviour, and for the one initiator
 setting you should not change.
 
+### Multipath (DM-MPIO)
+
+When QuantaStor serves iSCSI on more than one network port, the storage can use
+every portal at once and keep guest I/O running when one path fails. Turn it on
+with `multipath 1`; it is off by default.
+
+With multipath on, the plugin logs each volume in on every portal QuantaStor
+advertises for it, builds a device-mapper multipath map for that one LUN, and
+gives guests the map (`/dev/disk/by-id/dm-uuid-mpath-<wwid>`) instead of a
+single-path device. Deactivating, deleting, rolling back, templating or cloning
+a volume tears down or brings up every path, and an online resize rescans every
+path and grows the map.
+
+**Prerequisites, on every node:**
+
+1. Install `multipath-tools` (the package recommends it; the storage refuses to
+   activate with `multipath 1` if `multipathd` is missing):
+
+   ```bash
+   apt install multipath-tools
+   ```
+
+2. Add a device section for QuantaStor LUNs to `/etc/multipath.conf` and reload
+   with `multipathd reconfigure`:
+
+   ```
+   devices {
+       device {
+           vendor               "OSNEXUS"
+           product              "QUANTASTOR"
+           path_grouping_policy "multibus"
+           path_checker         "tur"
+           failback             "immediate"
+           no_path_retry        24
+       }
+   }
+   ```
+
+   `no_path_retry 24` is not optional. multipathd shortens each iSCSI session's
+   recovery timeout to 5 seconds so that a dead path is dropped quickly; without
+   queueing, a moment when *every* path is down (a QuantaStor HA pool failover,
+   a switch reboot) would fail guest I/O instead of pausing it. With this setting
+   the map holds I/O for up to about two minutes (24 x the 5 s polling interval)
+   until a path returns.
+
+   Nothing else needs configuring. Debian's defaults (`find_multipaths strict`,
+   `user_friendly_names no`) mean multipathd only claims the LUNs the plugin
+   registers, never local disks, and the plugin addresses maps by WWID, so
+   `user_friendly_names` or aliases do not affect it.
+
+**Enable it** on a new storage with `--multipath 1` on `pvesm add`, the
+*Multipath* checkbox under the Add dialog's advanced options, or on an existing
+storage with `pvesm set <storeid> --multipath 1`. Change the setting only while
+no guest on that storage is running: a volume that is already logged in keeps the
+sessions it was activated with until it is deactivated.
+
+**Verify:** start a guest and check that it has one map with a path per portal,
+and that QEMU opened the map:
+
+```bash
+multipath -ll                       # OSNEXUS,QUANTASTOR map, one "active ready" line per portal
+qm showcmd <vmid> | grep -o 'dm-uuid-mpath-[0-9a-f]*'
+```
+
+Losing one path pauses I/O for about 15 seconds (the initiator's NOP-out timeout
+plus the 5 s recovery timeout) while the path is failed, then I/O continues on
+the remaining paths; the path is reinstated automatically when it comes back.
+
+**Advertised portals the node cannot reach are skipped.** QuantaStor advertises
+every port that has iSCSI enabled, including ports on networks the Proxmox nodes
+are not on. The plugin checks each portal with a 3-second TCP connection first
+and skips the ones that do not answer, logging a "not reachable on TCP,
+skipped" warning, instead of stalling activation on the initiator's login
+retries (about two minutes per unreachable portal). To keep the warning out of
+the log, enable iSCSI only on the QuantaStor ports the Proxmox nodes use:
+
+```bash
+qs np-modify --port=<port> --iscsi-enable=false    # on the appliance
+```
+
+A path that is down when a volume is activated is skipped the same way; it
+joins the map the next time the volume is activated (guest start or
+migration).
+
 ### Verifying your setup
 
 After the create, the password file should exist on **every** cluster node:
@@ -421,11 +522,11 @@ Validated container lifecycle (PVE 9.1/9.2, two-node cluster):
   shorten the watchdog or fence-delay defaults; and ext4's multi-mount
   protection acted as a second line of defense, making the surviving node wait
   and confirm the filesystem was free before mounting.
-- **QuantaStor version**: use a current QuantaStor 7 build that includes the
-  server-side fix for the template-conversion volume wedge and the
-  fresh-snapshot delete window. Older 7.0 builds wedge volumes on template
-  conversion (stale NVMeoF export after rename) and refuse fresh-snapshot
-  deletes for several minutes (see Troubleshooting, `err=493`).
+- **QuantaStor version**: QuantaStor 6.9 is the recommended release. It
+  includes the server-side fixes for the template-conversion volume wedge and
+  the fresh-snapshot delete window. Builds without them wedge volumes on
+  template conversion (stale NVMeoF export after rename) and refuse
+  fresh-snapshot deletes for several minutes (see Troubleshooting, `err=493`).
 
 ---
 
@@ -731,9 +832,19 @@ my $iscsi = PVE::Storage::QuantaStor::ISCSIManager->new(
 | `wait_for_logout($target_iqn, $max_wait)` | Poll until session gone or timeout; caller must invoke `logout()` first |
 | `wait_for_device($target_iqn, $lun, $max_wait)` | Poll the by-path symlink until present, default 30s timeout |
 | `rescan($target_iqn)` | Re-read LUN capacity from target after an online resize so the kernel block device reports the new size before QEMU's `block_resize` QMP fires. No-op when not logged in. |
+| `sessions($target_iqn)` | Active sessions for the target as `{ sid, portal }` (IPv4 and IPv6 portals) |
+| `discover_portals($target_iqn)` | Every `ip:port` QuantaStor advertises for the target (sendtargets, brief retry); dies if none |
+| `login_all($target_iqn)` | Log in on every advertised portal that has no session yet (repeat-safe), skipping portals that do not accept a TCP connection within 3 s; dies only if no path is up; falls back to `login()` if discovery fails |
+| `logout_all($target_iqn)` | Log out every active session for the target |
+| `rescan_all($target_iqn)` | Rescan each session by id; returns how many were rescanned |
+| `map_path($wwid)` | `/dev/disk/by-id/dm-uuid-mpath-<wwid>` (independent of `user_friendly_names`) |
+| `add_map($wwid, $max_wait)` | `multipath -a` + build the map for this WWID only, then wait for `map_path` |
+| `flush_map($wwid)` | `multipath -f` if the map exists; dies if it is still in use |
+| `resize_map($wwid)` | `multipathd resize map` after `rescan_all` |
 
 Device paths use `/dev/disk/by-path/` for stability across reboots, unlike ephemeral
-`/dev/sdX` assignments.
+`/dev/sdX` assignments. The multipath methods are used only for storages with
+`multipath 1` (see [Multipath](#multipath-dm-mpio)).
 
 ---
 
@@ -812,22 +923,22 @@ The top-level PVE storage plugin. Inherits from `PVE::Storage::Plugin` and wires
 | PVE Hook | What it does |
 |---|---|
 | `type` | Returns `'quantastor'` |
-| `activate_storage` | Verify API connectivity; auto-register PVE node as iSCSI initiator host |
+| `activate_storage` | Verify API connectivity; auto-register PVE node as iSCSI initiator host; with `multipath 1`, fail if `multipathd` is not installed |
 | `status` | `pool_get` → `(total, free, used, active)` |
 | `list_images` | `volume_enum` filtered by pool + PVE naming convention |
-| `path` | `volume_get` → IQN → `/dev/disk/by-path/` stable device path |
+| `path` | `volume_get` → IQN → `/dev/disk/by-path/` stable device path; with `multipath 1`, the dm map `/dev/disk/by-id/dm-uuid-mpath-<wwid>` (WWID derived from the volume's `deviceDescriptor`, no session needed) |
 | `volume_size_info` | `volume_get` → size in bytes |
 | `alloc_image` | `volume_create` → returns volname |
-| `free_image` | logout → ACL remove → `volume_delete` (best-effort teardown; only delete fails loud) |
-| `activate_volume` | `volume_acl_add` → iSCSI login → `wait_for_device` (dies with a clear message if the by-path symlink hasn't appeared within 30s) |
-| `deactivate_volume` | iSCSI logout → `wait_for_logout` → `volume_acl_remove` |
-| `volume_resize` | `storageVolumeResize` with `newSizeInBytes` (flags=2 resizes through an active session — no logout), then an iSCSI rescan so the kernel sees the new LUN size — shrinking not supported |
+| `free_image` | logout (multipath: flush map, then every path) → ACL remove → `volume_delete` (best-effort teardown; only delete fails loud) |
+| `activate_volume` | `volume_acl_add` → iSCSI login → `wait_for_device` (dies with a clear message if the by-path symlink hasn't appeared within 30s); with `multipath 1`, `login_all` → `add_map` (dies if the map hasn't appeared within 30s) |
+| `deactivate_volume` | iSCSI logout (multipath: `flush_map` first, then `logout_all`) → `wait_for_logout` → `volume_acl_remove` |
+| `volume_resize` | `storageVolumeResize` with `newSizeInBytes` (flags=2 resizes through an active session — no logout), then an iSCSI rescan so the kernel sees the new LUN size (multipath: `rescan_all` → `resize_map`) — shrinking not supported |
 | `volume_snapshot` | `volume_snapshot` (snap stored as `<volname>_<snap>`) |
 | `volume_snapshot_delete` | `volume_get(snap)` → `volume_delete`; retries a busy (`err=493`) delete for ~3 minutes, other faults fail fast |
 | `volume_snapshot_rollback` | logout (if session active) → `wait_for_session_gone` (QS-side GC) → `volume_rollback`; no re-login (PVE calls `activate_volume` on next start) |
 | `volume_rollback_is_possible` | Timestamp comparison across sibling snapshots |
-| `create_base` | offline → rename `vm-`→`base-` → template snapshot → online |
-| `clone_image` | `volume_clone` from template snapshot → ACL → login |
+| `create_base` | offline → rename `vm-`→`base-` → template snapshot → online (multipath: every path) |
+| `clone_image` | `volume_clone` from template snapshot → ACL → login (multipath: every path) |
 | `volume_has_feature` | snapshot, clone, template, copy, sparseinit |
 | `storage_can_replicate` | Returns 0 (not supported in this release) |
 
@@ -879,7 +990,9 @@ Two things to be aware of before relying on this:
   initiator gives a session to come back before it fails the queued I/O up the
   stack, and it is what makes the pause survivable. Tuning advice that shortens it
   for fast multipath failover does not apply here — there is no alternate path to
-  switch to, so shortening it turns a survivable pause into I/O errors. Note that
+  switch to, so shortening it turns a survivable pause into I/O errors. (With the
+  plugin's `multipath 1`, multipathd does shorten it, and the `no_path_retry`
+  queueing in [Multipath](#multipath-dm-mpio) is what carries the pause instead.) Note that
   the per-command SCSI timeout (`/sys/block/sd*/device/timeout`, 30 seconds) does
   *not* govern this window: while the session is in recovery the transport blocks
   the device queue and holds the I/O rather than timing commands out. On a

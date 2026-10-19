@@ -1,3 +1,26 @@
+pve-storage-quantastor (1.1.0-1) unstable; urgency=medium
+
+  * v1.1.0 — iSCSI multipath. Changes since 1.0.1:
+  * New opt-in 'multipath' storage option (DM-MPIO). Each volume is logged
+    in on every portal QuantaStor advertises for it and guests use the
+    multipath device (/dev/disk/by-id/dm-uuid-mpath-<wwid>), so I/O
+    continues when a path fails. Activation is repeatable, teardown flushes
+    the map before logging out, and delete, rollback, template, clone and
+    online resize all handle every path. Based on a community contribution
+    by winsposure (GitHub PR #20).
+  * Multipath: advertised portals that do not accept a TCP connection within
+    3 seconds are skipped with a warning, instead of stalling every
+    activation on the initiator's login retries (about two minutes per
+    unreachable portal).
+  * Web UI: Multipath checkbox under the storage dialog's advanced options.
+  * Packaging: Recommends multipath-tools.
+  * README: Multipath section — prerequisites, the required multipath.conf
+    device section (no_path_retry queueing, so an all-paths-down window
+    such as an HA pool failover pauses I/O instead of failing it), and how
+    to verify.
+
+ -- OSNexus <support@osnexus.com>  Mon, 19 Oct 2026 21:30:59 +0000
+
 pve-storage-quantastor (1.0.1-1) unstable; urgency=medium
 
   * v1.0.1 — stability and documentation release. Changes since 1.0.0:

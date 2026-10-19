@@ -3,6 +3,7 @@ package PVE::Storage::QuantaStor::ISCSIManager;
 use strict;
 use warnings;
 use Carp qw(croak);
+use IO::Socket::IP;
 
 our $VERSION = '1.0.0';
 
@@ -86,6 +87,10 @@ sub new {
         # Coderef receiving a number of seconds to sleep. Default is the
         # built-in sleep; tests inject a no-op so wait_for_* loops are instant.
         _sleep          => $args{_sleep}         // sub { sleep $_[0] },
+
+        # Coderef receiving an 'ip:port' (or '[ipv6]:port') portal, returning
+        # truthy if it accepts a TCP connection. Tests inject a stub.
+        _portal_reachable => $args{_portal_reachable} // \&_default_portal_reachable,
     };
 
     return bless $self, $class;
@@ -312,13 +317,39 @@ sub device_path {
 }
 
 # ---------------------------------------------------------------------------
-# Multipath discovery
+# Multipath (opt-in, storage option 'multipath')
 # ---------------------------------------------------------------------------
+
+=head2 sessions($target_iqn)
+
+Returns the active sessions for C<$target_iqn> as a list of
+C<{ sid =E<gt> ..., portal =E<gt> 'ip:port' }>, parsed from
+C<iscsiadm -m session>. Empty list when there are none.
+
+=cut
+
+sub sessions {
+    my ($self, $target_iqn) = @_;
+    croak "sessions: target_iqn is required"
+        unless defined $target_iqn && length $target_iqn;
+
+    # Non-zero exit from 'iscsiadm -m session' means no sessions at all.
+    my $out = eval { $self->_run('iscsiadm', '-m', 'session') } // '';
+    my @s;
+    for my $line (split /\r?\n/, $out) {
+        # tcp: [3] 10.0.0.1:3260,1 iqn... (non-flash)   /  [fd00::1]:3260,1 for IPv6
+        next unless $line =~ /^\S+:\s+\[(\d+)\]\s+(\[[0-9a-fA-F:.]+\]:\d+|[\d.]+:\d+),\d+\s+(\S+)/;
+        push @s, { sid => $1, portal => $2 } if $3 eq $target_iqn;
+    }
+    return @s;
+}
 
 =head2 discover_portals($target_iqn)
 
-Sendtargets discovery against the configured portal, returns every
-ip:port QuantaStor advertises for $target_iqn (one entry per NIC/path).
+Sendtargets discovery against the configured portal; returns every
+C<ip:port> QuantaStor advertises for C<$target_iqn> (one per path).
+Retries briefly because a just-added ACL can take a moment to show up.
+Dies if none are found.
 
 =cut
 
@@ -331,33 +362,23 @@ sub discover_portals {
     my $delay = $opt{delay} // 1;
 
     for my $attempt (1 .. $tries) {
-        my @out = eval { $self->_run('iscsiadm', '-m', 'discovery',
-            '-t', 'sendtargets', '-p', $self->{portal}) };
+        my $out = eval { $self->_run('iscsiadm', '-m', 'discovery',
+            '-t', 'sendtargets', '-p', $self->{portal}) } // '';
 
         my %portals;
-        # defensive: _run may hand back one multi-line blob instead of
-        # pre-split lines, so re-split everything on newlines ourselves.
-        for my $chunk (@out) {
-            for my $line (split /\r?\n/, $chunk) {
-                $line =~ s/^\s+|\s+$//g;
-                next unless $line =~ /^([\d.]+:\d+),\d+\s+(\S+)$/;
-                $portals{$1} = 1 if $2 eq $target_iqn;
-            }
+        for my $line (split /\r?\n/, $out) {
+            $line =~ s/^\s+|\s+$//g;
+            next unless $line =~ /^(\[[0-9a-fA-F:.]+\]:\d+|[\d.]+:\d+),\d+\s+(\S+)$/;
+            $portals{$1} = 1 if $2 eq $target_iqn;
         }
 
         my @portals = sort keys %portals;
         if (@portals) {
             $self->{logger}->(info => "ISCSIManager: discovered "
-                . scalar(@portals) . " portal(s) for $target_iqn"
-                . ($attempt > 1 ? " (attempt $attempt)" : ""));
+                . scalar(@portals) . " portal(s) for $target_iqn");
             return @portals;
         }
-
-        $self->{logger}->(info => "ISCSIManager: discovery attempt "
-            . "$attempt/$tries found no portals for $target_iqn yet"
-            . " (ACL may still be propagating), retrying...")
-            if $attempt < $tries;
-        sleep $delay if $attempt < $tries;
+        $self->{_sleep}->($delay) if $attempt < $tries;
     }
 
     croak "discover_portals: no portals found for '$target_iqn' via "
@@ -366,8 +387,11 @@ sub discover_portals {
 
 =head2 login_all($target_iqn)
 
-Logs in to every portal returned by discover_portals(), one iSCSI
-session/path per portal. Dies only if ALL logins fail.
+Logs in to every advertised portal for C<$target_iqn> that does not already
+have a session, so repeated activation is a no-op. Portals that do not accept
+a TCP connection within 3 seconds are skipped with a warning. Dies only if no
+path ends up logged in. Falls back to a single-portal C<login()> when
+discovery fails.
 
 =cut
 
@@ -375,15 +399,21 @@ sub login_all {
     my ($self, $target_iqn) = @_;
 
     my @portals = eval { $self->discover_portals($target_iqn) };
-    if ($@ || !@portals) {
-        $self->{logger}->(info => "ISCSIManager: falling back to single "
-            . "portal login for $target_iqn ($self->{portal})");
-        $self->login($target_iqn);
-        return 1;
+    if (!@portals) {
+        $self->{logger}->(warning => "ISCSIManager: multipath discovery failed for "
+            . "$target_iqn, falling back to single-portal login: $@");
+        return $self->login($target_iqn);
     }
 
-    my ($ok, @errs) = (0);
-    for my $portal (@portals) {
+    my %have = map { $_->{portal} => 1 } $self->sessions($target_iqn);
+    my ($ok, @errs) = (scalar(grep { $have{$_} } @portals));
+    for my $portal (grep { !$have{$_} } @portals) {
+        # An advertised portal this node cannot reach would otherwise cost
+        # iscsiadm's full login retry budget (~2 min) on every activation.
+        unless ($self->{_portal_reachable}->($portal)) {
+            push @errs, "$portal: not reachable on TCP, skipped";
+            next;
+        }
         eval {
             $self->_run('iscsiadm', '-m', 'node',
                 '--targetname', $target_iqn,
@@ -395,81 +425,140 @@ sub login_all {
     croak "login_all: all logins failed for '$target_iqn': " . join('; ', @errs)
         unless $ok;
 
+    $self->{logger}->(warning => "ISCSIManager: some paths failed for $target_iqn: "
+        . join('; ', @errs)) if @errs;
     $self->{logger}->(info => "ISCSIManager: $ok/" . scalar(@portals)
-        . " path(s) logged in for $target_iqn");
+        . " path(s) up for $target_iqn");
     return $ok;
+}
+
+# True if the portal accepts a TCP connection within 3 seconds.
+sub _default_portal_reachable {
+    my ($portal) = @_;
+    my ($host, $port) = $portal =~ /^\[?([^\]]+?)\]?:(\d+)$/ or return 0;
+    my $s = IO::Socket::IP->new(PeerHost => $host, PeerPort => $port, Timeout => 3)
+        or return 0;
+    close $s;
+    return 1;
 }
 
 =head2 logout_all($target_iqn)
 
-Logs out every path for $target_iqn. Non-fatal.
+Logs out every active session for C<$target_iqn> (from C<sessions()>, so it
+works after the ACL is gone or with discovery unreachable). Non-fatal; call
+C<flush_map()> first.
 
 =cut
 
 sub logout_all {
     my ($self, $target_iqn) = @_;
-    my @portals = eval { $self->discover_portals($target_iqn) };
 
-    my $any = 0;
-    for my $portal (@portals) {
+    my @s = $self->sessions($target_iqn);
+    return $self->logout($target_iqn) unless @s;
+
+    for my $portal (map { $_->{portal} } @s) {
         eval {
             $self->_run('iscsiadm', '-m', 'node',
                 '--targetname', $target_iqn,
                 '--portal', $portal, '--logout');
-            $any = 1;
         };
+        $self->{logger}->(warning => "ISCSIManager: logout of $target_iqn via "
+            . "$portal failed: $@") if $@;
     }
-    $self->logout($target_iqn) unless $any; # fallback: old single-path logout
     return 1;
 }
 
-=head2 wwid_for($target_iqn, $lun)
+=head2 rescan_all($target_iqn)
 
-Resolves the LUN's SCSI WWID via udev using whichever by-path device
-is currently up (WWID is a LUN property, not path-specific).
-
-=cut
-
-sub wwid_for {
-    my ($self, $target_iqn, $lun) = @_;
-    $lun //= 0;
-
-    croak "wwid_for: no path up for '$target_iqn' lun $lun"
-        unless $self->wait_for_device($target_iqn, $lun, 30);
-
-    my $dev = $self->device_path($target_iqn, $lun);
-    my @out = $self->_run('/lib/udev/scsi_id', '--whitelisted', "--device=$dev");
-    my $wwid = $out[0] // '';
-    $wwid =~ s/\s+$//;
-    croak "wwid_for: scsi_id returned no WWID for $dev" unless length $wwid;
-    return $wwid;
-}
-
-=head2 mapper_path($target_iqn, $lun) / wait_for_mapper(...)
-
-Ensures multipathd owns the WWID and returns/waits for /dev/mapper/<wwid>.
-Call AFTER login_all() so all sessions exist before the map is built.
+Rescans every session for C<$target_iqn> so each path sees a resized LUN.
+Returns the number of sessions rescanned (0 when none are active).
 
 =cut
 
-sub mapper_path {
-    my ($self, $target_iqn, $lun) = @_;
-    my $wwid = $self->wwid_for($target_iqn, $lun // 0);
-    eval { $self->_run('multipath', '-a', $wwid) };  # ignore "already in wwids"
-    $self->_run('multipath', '-r');                  # (re)build the map
-    return "/dev/mapper/$wwid";
-}
-
-sub wait_for_mapper {
-    my ($self, $target_iqn, $lun, $max_wait) = @_;
-    $max_wait //= 30;
-    my $mapper = $self->mapper_path($target_iqn, $lun // 0);
-    for (my $t = 0; $t <= $max_wait; $t++) {
-        return $mapper if -e $mapper;
-        sleep 1;
-        eval { $self->_run('multipath', '-r') };
+sub rescan_all {
+    my ($self, $target_iqn) = @_;
+    my $n = 0;
+    for my $s ($self->sessions($target_iqn)) {
+        eval { $self->_run('iscsiadm', '-m', 'session', '-r', $s->{sid}, '--rescan') };
+        if ($@) {
+            $self->{logger}->(warning => "ISCSIManager: rescan of session $s->{sid} "
+                . "($target_iqn) failed: $@");
+            next;
+        }
+        $n++;
     }
-    return undef;
+    return $n;
+}
+
+=head2 map_path($wwid)
+
+Returns the stable link to the multipath device for C<$wwid>. The dm-uuid
+link does not depend on C<user_friendly_names> or aliases.
+
+=cut
+
+sub map_path {
+    my ($self, $wwid) = @_;
+    return "/dev/disk/by-id/dm-uuid-mpath-$wwid";
+}
+
+=head2 add_map($wwid, $max_wait)
+
+Whitelists C<$wwid> and builds its multipath map (this WWID only, unlike
+C<multipath -r>), then waits for C<map_path()> to appear. Returns 1 when it
+exists, 0 on timeout.
+
+=cut
+
+sub add_map {
+    my ($self, $wwid, $max_wait) = @_;
+    croak "add_map: wwid is required" unless defined $wwid && length $wwid;
+    $max_wait //= 30;
+
+    eval { $self->_run('multipath', '-a', $wwid) };   # "already in wwids" is fine
+    my $path = $self->map_path($wwid);
+    for (my $t = 0; $t < $max_wait; $t++) {
+        # Re-issue every few seconds: paths may still be appearing.
+        eval { $self->_run('multipath', $wwid) } if $t % 5 == 0;
+        return 1 if $self->{_path_exists}->($path);
+        $self->{_sleep}->(1);
+    }
+    return 1 if $self->{_path_exists}->($path);
+    $self->{logger}->(warning => "ISCSIManager: timeout waiting for multipath map '$path'");
+    return 0;
+}
+
+=head2 flush_map($wwid)
+
+Removes the multipath map for C<$wwid> if one exists. Must run before the
+paths are logged out: a map left without paths queues I/O and can hang
+anything that touches it. Dies if the map is still in use.
+
+=cut
+
+sub flush_map {
+    my ($self, $wwid) = @_;
+    return 1 unless $self->{_path_exists}->($self->map_path($wwid));
+    eval { $self->_run('multipath', '-f', $wwid) };
+    croak "flush_map: could not flush multipath map $wwid (still in use?): $@" if $@;
+    return 1;
+}
+
+=head2 resize_map($wwid)
+
+Tells multipathd to pick up a resized LUN. Call after C<rescan_all()>.
+Returns 1 on success, 0 on failure (logged).
+
+=cut
+
+sub resize_map {
+    my ($self, $wwid) = @_;
+    eval { $self->_run('multipathd', 'resize', 'map', $wwid) };
+    if ($@) {
+        $self->{logger}->(warning => "ISCSIManager: multipathd resize of $wwid failed: $@");
+        return 0;
+    }
+    return 1;
 }
 
 # ---------------------------------------------------------------------------
