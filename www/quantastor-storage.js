@@ -152,6 +152,7 @@ Ext.define('PVE.storage.QuantaStorInputPanel', {
 		name: 'password',
 		value: me.isCreate ? '' : '********',
 		fieldLabel: gettext('Password'),
+		emptyText: gettext('password, or QSAPPTKN:<token> with an app key as username'),
 		allowBlank: !me.isCreate,
 	    },
 	    {

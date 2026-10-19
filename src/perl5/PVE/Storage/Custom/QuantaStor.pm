@@ -18,7 +18,7 @@ if (eval { require PVE::SafeSyslog; 1 }) {
     $_syslog_fn = \&PVE::SafeSyslog::syslog;
 }
 
-our $VERSION = '1.0.0';
+our $VERSION = '1.0.1';
 
 =head1 NAME
 
@@ -68,6 +68,12 @@ my $SNAP_SEP = '_';   # separator between volume name and snapshot name
 # Package vars so tests can localize them to keep the suite fast.
 our $ACL_ADD_ATTEMPTS   = 5;
 our $ACL_ADD_RETRY_SECS = 3;
+
+# Retry budget for a busy snapshot delete (err=493, see volume_snapshot_delete).
+# 10 x 20s covers the ~3 minute window observed on appliances without the
+# server-side fix. Package vars so tests can localize them.
+our $SNAP_DELETE_ATTEMPTS   = 10;
+our $SNAP_DELETE_RETRY_SECS = 20;
 
 # ---------------------------------------------------------------------------
 # Password file helpers
@@ -806,7 +812,27 @@ sub volume_snapshot_delete {
 
     # Force-delete: PVE expects volume_snapshot_delete to remove the snapshot
     # even if QuantaStor considers it busy.
-    $client->volume_delete($snap_vol->{id}, flags => 2);
+    #
+    # Appliances without the server-side fix refuse to destroy a freshly
+    # created snapshot zvol (err=493 DELETE_ZVOL_FAILED, "Dataset is busy") for
+    # a few minutes after creation. A single failure here leaves the guest in a
+    # snapshot-delete lock, so ride out that window; the same delete succeeds
+    # once it closes. Any other fault is real and must still fail immediately.
+    my $deleted = 0;
+    my $del_err;
+    for my $attempt (1 .. $SNAP_DELETE_ATTEMPTS) {
+        eval { $client->volume_delete($snap_vol->{id}, flags => 2) };
+        if (!$@) { $deleted = 1; last }
+        $del_err = $@;
+        # The appliance's own deferred retry may have finished the job meanwhile.
+        if ($del_err =~ /could not be found|err=5\b/i) { $deleted = 1; last }
+        die $del_err unless $del_err =~ /err=493\b/;
+        _logger($storeid)->(warning =>
+            "volume_snapshot_delete: snapshot '$snap_name' busy on QuantaStor "
+          . "(attempt $attempt/$SNAP_DELETE_ATTEMPTS), retrying: $del_err");
+        sleep $SNAP_DELETE_RETRY_SECS if $attempt < $SNAP_DELETE_ATTEMPTS;
+    }
+    die $del_err unless $deleted;
 
     return undef;
 }
