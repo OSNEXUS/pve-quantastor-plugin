@@ -13,7 +13,7 @@ storage backend for virtual machines and containers.
 | `QuantaStor/APIClient.pm` | Complete — clean REST client, 50 unit tests |
 | `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 42 unit tests |
 | `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 65 unit tests |
-| Debian packaging | Complete — `pve-storage-quantastor_1.0.0-1_all.deb` |
+| Debian packaging | Complete — `pve-storage-quantastor_1.0.1-1_all.deb` |
 
 ---
 
@@ -25,18 +25,27 @@ QuantaStor manages storage volumes internally and exports them over iSCSI. The p
 Proxmox VE's storage layer and the QuantaStor REST API:
 
 ```
-Proxmox VE Storage Layer
+Proxmox VE storage layer (pvedaemon / pvestatd / qm / pct)
         │
         ▼
- Custom/QuantaStor.pm          ← PVE storage plugin (registers type 'quantastor')
+ Custom/QuantaStor.pm            ← PVE storage plugin (registers type 'quantastor')
         │
-        ├── APIClient.pm       ← HTTPS REST calls to QuantaStor (port 8153)
+        ├── APIClient.pm ─────── control plane ──────► QuantaStor REST API (HTTPS :8153)
+        │                        provision / snapshot / clone / resize / ACL
         │
-        └── ISCSIManager.pm   ← iscsiadm login/logout/discovery on PVE host
+        └── ISCSIManager.pm      ← iscsiadm discover/login/logout/rescan
                 │
                 ▼
-        /dev/disk/by-path/...  ← stable block device for QEMU
+        open-iscsi initiator ═══ data plane (guest I/O) ═══► iSCSI target (TCP :3260)
+                │                                            one target per volume, LUN 0
+                ▼
+        /dev/disk/by-path/...    ← stable block device
+                │
+                ▼
+        QEMU raw VM disk (images) / ext4 container rootfs (rootdir)
 ```
+
+The same diagram as an image: [`docs/architecture.svg`](docs/architecture.svg).
 
 ### QuantaStor API
 
@@ -101,7 +110,7 @@ PVE volume names follow the standard Proxmox convention:
 Download the latest `.deb` from the releases page and install it on each PVE node:
 
 ```bash
-dpkg -i pve-storage-quantastor_1.0.0-1_all.deb
+dpkg -i pve-storage-quantastor_1.0.1-1_all.deb
 # PVE services are restarted automatically by postinst
 ```
 
@@ -110,6 +119,30 @@ is refreshed. The package includes two dpkg file triggers: one on `index.html.tp
 (re-injects the UI script tag when `pve-manager` is upgraded) and one on
 `PVE/API2/Storage/Scan.pm` (re-injects the pool-scan API route when `pve-storage` is
 upgraded). No manual reinstall is required after either upgrade.
+
+### Upgrading from the patch-based alpha
+
+The archived v0.1 alpha (GitHub tag `v0.1-alpha`) worked by patching Proxmox's own
+storage modules and registered its storage as a `zfs` entry with
+`iscsiprovider quantastor`. Version 1.0.0 replaced that integration entirely and
+1.0.1 is the same first-class plugin, so on any node running 1.0.0 or later:
+
+- **A leftover alpha storage entry is inert.** The Proxmox core patches it relied
+  on do not survive a `pve-storage` upgrade, so the entry has no working provider
+  behind it. Nothing warns about this: the entry still shows in `pvesm status`,
+  but every operation against it fails.
+- **Do not point a `quantastor` storage and a leftover alpha entry at the same
+  pool.** Both name volumes `vm-<id>-disk-<n>`, so two storage entries would be
+  managing the same QuantaStor volumes and access lists.
+- **Moving disks between the two entries is not a supported path.** Do not
+  `qm move-disk` / `pct move-volume` onto the alpha entry.
+
+Recommended sequence: stop the guests that use the alpha entry, note their
+volumes, remove the alpha entry with `pvesm remove <storeid>`, add the
+`quantastor` storage for the same pool, then re-attach each guest's disks under
+the new storage (the volumes on the appliance are untouched by this). Finally
+restore pristine Proxmox files with `apt reinstall pve-storage pve-manager`.
+See Roadmap for the migration tooling that would automate this.
 
 ### Manual install (no package)
 
@@ -146,7 +179,7 @@ systemctl restart pvedaemon pveproxy pvestatd
 apt install debhelper
 
 bash build-deb.sh
-# Produces ../pve-storage-quantastor_1.0.0-1_all.deb
+# Produces ../pve-storage-quantastor_1.0.1-1_all.deb
 ```
 
 ---
@@ -168,6 +201,47 @@ as an explicit error naming the file and remediation; older builds silently
 shipped an empty password and surfaced a misleading `[err=26] Authentication
 check failed` from QuantaStor.
 
+### Authenticating with an API token instead of a password
+
+The plugin can authenticate to the appliance with a QuantaStor **user
+application token** rather than a user's password, so the PVE cluster never
+holds a login that also works in the web UI. No plugin option is involved: the
+token is entered in the same two fields.
+
+1. On the appliance, create a token for the account the plugin will use
+   (ideally a dedicated least-privilege user, see below):
+
+   ```bash
+   qs user-app-token-add --user=pve-plugin --name=pve-cluster
+   ```
+
+   The result shows an **app key** (a UUID, acts as the username) and a
+   64-character **access token** (acts as the password). Copy the access token
+   now; it is not shown again. The web UI offers the same under the user's
+   security settings.
+2. Add or edit the PVE storage with
+   **Username** = the app key and **Password** = `QSAPPTKN:` followed by the
+   access token, for example `QSAPPTKN:3f9a…c21e`. The token name also works in
+   place of the app key.
+3. Everything else is unchanged: the pool scan button, `pvesm add`, volume
+   create/attach/delete all run under the token, and the credential is stored in
+   `/etc/pve/priv/storage/<storeid>.pw` exactly like a password.
+
+Notes:
+
+- A token inherits the role of the user it belongs to, so pair it with a
+  least-privilege user rather than `admin`. Do **not** mark the token read-only;
+  the plugin creates and deletes volumes.
+- Tokens can carry an expiry. Set none (the default) for a storage credential,
+  or plan to rotate it: `qs user-app-token-delete` then create a new one and
+  `pvesm set <storeid> -password 'QSAPPTKN:<new token>'`.
+- Revoking access is one command on the appliance (`qs user-app-token-delete`);
+  the PVE side needs no change until a new token is issued.
+- Verified with this plugin against a QuantaStor 7 lab appliance: pool scan,
+  storage add, volume alloc and free, storage remove. Both a non-expiring and an
+  expiring token authenticated; a wrong token is rejected with the usual
+  `[err=26]` authentication failure.
+
 ### Web UI
 
 Go to **Datacenter → Storage → Add → QuantaStor**.
@@ -176,16 +250,16 @@ Go to **Datacenter → Storage → Add → QuantaStor**.
 |---|---|---|
 | ID | General | Auto-fills with the first available `qs-storage-N`; edit as needed |
 | API Host | General | QuantaStor appliance IP or hostname |
-| Username | General | QuantaStor API user (typically `admin`) |
-| Password | General | API password — stored securely, never written to `storage.cfg` |
+| Username | General | QuantaStor API user, or the app key of an API token (see "Authenticating with an API token") |
+| Password | General | API password, or `QSAPPTKN:<access token>` — stored securely, never written to `storage.cfg` |
 | Pool | General | Storage pool name on the QuantaStor appliance. Click the scan button (🔍) to connect to the appliance and populate a dropdown of available pools. |
-| Content | General | Fixed to `Disk image` — the only supported content type in this release |
+| Content | General | `Disk image` (VM disks), `Container` (LXC root filesystems), or both — both are preselected |
 | Nodes | General | Restrict to specific PVE nodes (leave empty for all nodes) |
 | iSCSI Portal | Advanced | Portal address for iSCSI login — defaults to API Host if left blank |
 | SSL Verify | Advanced | Enable SSL certificate verification — leave off for self-signed certs |
 
-`API Host`, `Username`, and `Pool` are fixed after creation. `Content` is always
-`Disk image` and cannot be changed. All other fields can be edited later via the UI.
+`API Host`, `Username`, and `Pool` are fixed after creation. All other fields can
+be edited later via the UI.
 
 ### CLI
 
@@ -203,7 +277,8 @@ pvesm add quantastor my-quantastor \
 ```
 
 Single-quote the password so the shell does not interpret special characters
-(`$`, `!`, backticks, etc.).
+(`$`, `!`, backticks, etc.). For token authentication pass the app key as
+`--username` and `'QSAPPTKN:<access token>'` as `--password`.
 
 `--portal` and `--ssl_verify` are optional. `--portal` defaults to `--api_host`
 if omitted; `--ssl_verify` defaults to `0` (off, suitable for self-signed
@@ -234,6 +309,38 @@ the storage. **Avoid `pvesm remove` + `pvesm add` to apply changes** — the
 remove path runs `on_delete_hook` which deletes the password file across the
 cluster; if the subsequent re-add doesn't capture the password cleanly, you
 end up with the missing-`.pw`-file failure mode described above.
+
+### QuantaStor HA storage pools
+
+If the pool is a QuantaStor **HA storage pool** — one that fails over between two
+controllers — configure the storage against the **failover group's virtual
+interface**, not against either controller's own address:
+
+```
+# /etc/pve/storage.cfg
+quantastor: qs-ha
+        api_host 10.0.0.20        # the failover group's floating VIF
+        portal 10.0.0.20          # the same VIF
+        pool_id my-ha-pool
+        username admin
+        content images,rootdir
+        shared 1
+```
+
+Both `api_host` and `portal` must be that virtual interface. It moves with the
+pool when the pool fails over, so the REST API endpoint and the iSCSI portal
+follow the active controller on their own. Point either one at a controller's own
+address instead and the storage stops working the moment the pool moves to the
+other controller.
+
+Nothing else about the configuration changes — the plugin does not need to be
+told that the pool is an HA pool, and no extra options are required.
+
+Guests keep running across a failover, pausing for roughly 30–45 seconds while
+the pool is exported and re-imported. See
+[QuantaStor HA pool failover pauses guest I/O](#quantastor-ha-pool-failover-pauses-guest-io)
+under Known Limitations for the measured behaviour, and for the one initiator
+setting you should not change.
 
 ### Verifying your setup
 
@@ -299,10 +406,21 @@ Validated container lifecycle (PVE 9.1/9.2, two-node cluster):
   templates on `local` (or another file-based storage) and create containers
   from there onto QuantaStor. This mirrors RBD, where vztmpl is likewise not
   storable.
-- **HA fencing with mounted CT filesystems** has not been explicitly validated.
-  PVE's config locking prevents two nodes from mounting the same LUN during
-  normal operation (including migration), but fence-triggered recovery of a
-  node running CTs on QuantaStor storage has not been exercised.
+- **HA fencing with mounted CT filesystems** is safe under Proxmox's default
+  watchdog fencing, validated on a two-node cluster with a corosync QDevice and
+  corosync isolated from the storage network. With a container's rootfs on
+  QuantaStor storage under a continuous write load, the node running it was
+  partitioned from the cluster while its storage path stayed reachable — the
+  hazardous case. The partitioned node lost quorum in about fifteen seconds and
+  kept the LUN writable for roughly a minute more, then its watchdog reset it;
+  only after its iSCSI session was gone did the surviving node attach and mount
+  the LUN. There was no window in which both nodes wrote to the volume, and the
+  filesystem replayed its journal and mounted cleanly. Note two things: the
+  plugin provides no storage-level exclusion (both nodes may hold an ACL at
+  once), so this safety rests entirely on Proxmox's watchdog timing — do not
+  shorten the watchdog or fence-delay defaults; and ext4's multi-mount
+  protection acted as a second line of defense, making the surviving node wait
+  and confirm the filesystem was free before mounting.
 - **QuantaStor version**: use a current QuantaStor 7 build that includes the
   server-side fix for the template-conversion volume wedge and the
   fresh-snapshot delete window. Older 7.0 builds wedge volumes on template
@@ -398,9 +516,12 @@ On **older appliance builds**:
    after iSCSI target teardown. The plugin already rides this out
    (`free_image` retries, and falls back to per-snapshot deletion if a cascade
    delete partially completed). If a destroy still fails, simply retry it.
-2. **Fresh-snapshot window (~5 minutes):** a failed `pct delsnapshot` /
-   `qm delsnapshot` leaves the guest locked — unlock with `pct unlock <ctid>`
-   (or `qm unlock <vmid>`) and retry after a few minutes.
+2. **Fresh-snapshot window (~5 minutes):** deleting a snapshot within a few
+   minutes of creating it is refused while the zvol is busy. The plugin
+   retries `pct delsnapshot` / `qm delsnapshot` through this for about three
+   minutes (the task log shows each attempt) before giving up. If it still
+   fails, the guest is left locked — unlock with `pct unlock <ctid>` (or
+   `qm unlock <vmid>`) and retry after a few minutes.
 3. **Persistent — stale NVMeoF export after a rename** (`qm template` /
    `pct template` renames `vm-* -> base-*`): the nvmet subsystem keeps the OLD
    name, teardown never finds it, and its namespace holds the zvol open
@@ -700,9 +821,9 @@ The top-level PVE storage plugin. Inherits from `PVE::Storage::Plugin` and wires
 | `free_image` | logout → ACL remove → `volume_delete` (best-effort teardown; only delete fails loud) |
 | `activate_volume` | `volume_acl_add` → iSCSI login → `wait_for_device` (dies with a clear message if the by-path symlink hasn't appeared within 30s) |
 | `deactivate_volume` | iSCSI logout → `wait_for_logout` → `volume_acl_remove` |
-| `volume_resize` | `storageVolumeResize` with `newSizeInBytes`; waits for QS session GC first (same guard as rollback) — shrinking not supported |
+| `volume_resize` | `storageVolumeResize` with `newSizeInBytes` (flags=2 resizes through an active session — no logout), then an iSCSI rescan so the kernel sees the new LUN size — shrinking not supported |
 | `volume_snapshot` | `volume_snapshot` (snap stored as `<volname>_<snap>`) |
-| `volume_snapshot_delete` | `volume_get(snap)` → `volume_delete` |
+| `volume_snapshot_delete` | `volume_get(snap)` → `volume_delete`; retries a busy (`err=493`) delete for ~3 minutes, other faults fail fast |
 | `volume_snapshot_rollback` | logout (if session active) → `wait_for_session_gone` (QS-side GC) → `volume_rollback`; no re-login (PVE calls `activate_volume` on next start) |
 | `volume_rollback_is_possible` | Timestamp comparison across sibling snapshots |
 | `create_base` | offline → rename `vm-`→`base-` → template snapshot → online |
@@ -724,6 +845,70 @@ One minor quirk: `qm template` (`create_base`) re-logins to the renamed
 `base-*` volume after the operation, leaving an active iSCSI session on the
 coordinator node. PVE cleans this up automatically before any subsequent volume
 operation. It has no practical impact on cluster operations.
+
+### QuantaStor HA pool failover pauses guest I/O
+
+If the storage is backed by a QuantaStor **HA storage pool** — a failover group
+whose pool moves between two controllers — then a controller failover pauses I/O
+for every guest on that storage while the pool is exported from one controller
+and imported on the other.
+
+**Expect roughly 30–45 seconds of paused I/O.** Guests block for the duration
+rather than failing. Measured on a two-node HA pair with running VMs and
+containers on the pool, guest-visible pauses were **26–34 seconds**, after which
+I/O resumed with no data loss. Guests stayed running, filesystems were clean
+afterwards, and the iSCSI sessions recovered on their own — the initiator
+re-established the connections without the plugin having to log in again.
+
+**The pause does not grow with the number of volumes.** It was measured at 26
+seconds with one volume on the pool, 33 seconds with two, and 34 seconds with
+eleven volumes while a guest wrote continuously. The cost is dominated by
+exporting and importing the pool itself and moving the virtual interface, which
+happens once per failover regardless of how many volumes the pool serves. The
+failover operation as a whole does take longer with more volumes (45 to 50
+seconds in those runs), but the extra time is not spent blocking guest I/O.
+
+This assumes the storage is configured against the failover group's virtual
+interface rather than a single controller — see
+[QuantaStor HA storage pools](#quantastor-ha-storage-pools) under Configuration.
+
+Two things to be aware of before relying on this:
+
+- **Do not lower `node.session.timeo.replacement_timeout`** in
+  `/etc/iscsi/iscsid.conf`. At its default of 120 seconds it is the budget the
+  initiator gives a session to come back before it fails the queued I/O up the
+  stack, and it is what makes the pause survivable. Tuning advice that shortens it
+  for fast multipath failover does not apply here — there is no alternate path to
+  switch to, so shortening it turns a survivable pause into I/O errors. Note that
+  the per-command SCSI timeout (`/sys/block/sd*/device/timeout`, 30 seconds) does
+  *not* govern this window: while the session is in recovery the transport blocks
+  the device queue and holds the I/O rather than timing commands out. On a
+  validated failover the host kernel log shows only the connection error and, on
+  reconnect, a `Power-on or device reset occurred` notice — no command aborts.
+- Roughly 5–10 seconds of the pause is only *detection*. The initiator notices the
+  connection is gone through its NOP-out ping (`noop_out_interval` and
+  `noop_out_timeout`, 5 seconds each by default), so the total pause is the
+  appliance's pool export/import time plus that detection delay.
+
+**VMs running their own operating system survive this too.** A Debian 12 VM with
+its root ext4 filesystem — mounted `errors=remount-ro`, so it would drop to
+read-only on a write error — was failed over twice while writing continuously.
+Each time the guest saw a 26-second I/O pause and then carried on: the root
+filesystem stayed read-write, data written before the failover was intact, and the
+guest kernel logged nothing at all. No aborts, no timeouts, no filesystem errors.
+
+The guest's own disk timeout is not the deciding factor. Repeating the test with
+the guest's SCSI command timeout lowered to 5 seconds, far shorter than the pause,
+changed nothing — still no guest-side errors and no read-only remount. QEMU holds
+the outstanding request while the host waits for the session to come back, so the
+guest never receives an I/O error to react to. There is no need to tune guest disk
+timeouts for this.
+
+Those measurements used virtio-scsi with ext4. Other guest operating systems and
+disk controller types have not been characterised.
+
+This is separate from Proxmox's own HA — see the container limitations section
+regarding HA fencing.
 
 ### iSCSI LUN field
 
@@ -747,11 +932,16 @@ qm unlock <vmid>
 
 ### Rollback time varies
 
-QuantaStor's server-side session tracker takes a variable amount of time (typically
-5–30 seconds) to release after an iSCSI logout. The plugin polls `sessionEnum` and
-waits up to 30 seconds before calling the rollback API. This is normal behaviour — if
-rollback consistently takes close to 30s, contact OSNEXUS support to investigate the
-appliance's session GC configuration.
+QuantaStor's server-side session tracker does not release as soon as the initiator
+logs out. Its session manager refreshes on a cycle with a hardcoded 180-second
+floor, so a session can remain visible to the appliance for roughly that long
+after the guest stops. The plugin polls `sessionEnum` and waits up to 200 seconds
+before calling the rollback API, so that the wait outlasts that cycle.
+
+This means a rollback issued immediately after stopping a guest can legitimately
+take a couple of minutes to complete. That is normal behaviour, not a hang. If a
+rollback instead *fails* with an active-session error, contact OSNEXUS support to
+investigate the appliance's session configuration.
 
 ### "Older storage API" warning on PVE 9.2+
 

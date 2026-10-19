@@ -997,6 +997,93 @@ subtest 'volume_snapshot_delete removes snap volume' => sub {
     );
 };
 
+subtest 'volume_snapshot_delete retries a busy (err=493) delete until it succeeds' => sub {
+    # Appliances without the server-side fix refuse to destroy a fresh snapshot
+    # zvol for a few minutes. A single hard failure leaves the guest locked
+    # (snapshot-delete), so the hook must ride out the window.
+    my $calls = 0;
+    with_mocks(
+        {
+            storageVolumeGet    => { id => 'snap-vol-uuid' },
+            storageVolumeDelete => sub {
+                return { RestError => 'WebFault: Failed to delete storage volume vm-100-disk-0_snap1. Dataset is busy [err=493]' }
+                    if ++$calls < 3;
+                return { status => 'ok' };
+            },
+        },
+        {},
+        sub {
+            local $PVE::Storage::Custom::QuantaStor::SNAP_DELETE_RETRY_SECS = 0;
+            my $rv = eval { $CLASS->volume_snapshot_delete(make_scfg(), 'qs1', 'vm-100-disk-0', 'snap1', 0); 1 };
+            ok $rv, 'delete succeeded after retries' or diag $@;
+            is $calls, 3, 'two busy refusals then success';
+        }
+    );
+};
+
+subtest 'volume_snapshot_delete treats snapshot vanishing mid-retry as success' => sub {
+    # The appliance's own deferred retry can finish the delete between our
+    # attempts; a not-found on retry means the goal was reached.
+    my $calls = 0;
+    with_mocks(
+        {
+            storageVolumeGet    => { id => 'snap-vol-uuid' },
+            storageVolumeDelete => sub {
+                return { RestError => 'WebFault: Failed to delete storage volume [err=493]' } if ++$calls == 1;
+                return { RestError => 'Specified StorageVolume object snap-vol-uuid could not be found. [err=5]' };
+            },
+        },
+        {},
+        sub {
+            local $PVE::Storage::Custom::QuantaStor::SNAP_DELETE_RETRY_SECS = 0;
+            my $rv = eval { $CLASS->volume_snapshot_delete(make_scfg(), 'qs1', 'vm-100-disk-0', 'snap1', 0); 1 };
+            ok $rv, 'not-found on retry is success' or diag $@;
+            is $calls, 2, 'stopped retrying once the snapshot was gone';
+        }
+    );
+};
+
+subtest 'volume_snapshot_delete gives up after the retry budget' => sub {
+    my $calls = 0;
+    with_mocks(
+        {
+            storageVolumeGet    => { id => 'snap-vol-uuid' },
+            storageVolumeDelete => sub {
+                $calls++;
+                return { RestError => 'WebFault: Failed to delete storage volume [err=493]' };
+            },
+        },
+        {},
+        sub {
+            local $PVE::Storage::Custom::QuantaStor::SNAP_DELETE_RETRY_SECS = 0;
+            local $PVE::Storage::Custom::QuantaStor::SNAP_DELETE_ATTEMPTS   = 4;
+            eval { $CLASS->volume_snapshot_delete(make_scfg(), 'qs1', 'vm-100-disk-0', 'snap1', 0) };
+            like $@, qr/err=493/, 'busy error surfaces once the budget is spent';
+            is $calls, 4, 'exactly SNAP_DELETE_ATTEMPTS attempts made';
+        }
+    );
+};
+
+subtest 'volume_snapshot_delete does not retry a non-busy failure' => sub {
+    my $calls = 0;
+    with_mocks(
+        {
+            storageVolumeGet    => { id => 'snap-vol-uuid' },
+            storageVolumeDelete => sub {
+                $calls++;
+                return { RestError => 'Authentication check failed [err=26]' };
+            },
+        },
+        {},
+        sub {
+            local $PVE::Storage::Custom::QuantaStor::SNAP_DELETE_RETRY_SECS = 0;
+            eval { $CLASS->volume_snapshot_delete(make_scfg(), 'qs1', 'vm-100-disk-0', 'snap1', 0) };
+            like $@, qr/Authentication check failed/, 'auth error surfaces as-is';
+            is $calls, 1, 'failed fast on a non-transient error';
+        }
+    );
+};
+
 subtest 'volume_snapshot_rollback: logout then rollback when session active, no re-login' => sub {
     with_mocks(
         {

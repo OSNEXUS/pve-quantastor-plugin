@@ -627,6 +627,21 @@ subtest 'ensure_host_registered creates new host when not found' => sub {
     ok $ua->was_called('hostAdd'), 'hostAdd was called';
 };
 
+subtest 'an app token credential is passed through Basic auth untouched' => sub {
+    # QuantaStor app tokens authenticate as Basic with username = appKey and
+    # password = "QSAPPTKN:<token>". The colon inside the password must survive
+    # the user:pass join, so the server can split on the FIRST colon.
+    use MIME::Base64 qw(decode_base64);
+    my $tok = PVE::Storage::QuantaStor::APIClient->new(
+        host => 'x', username => 'c538eb34-app-key', password => 'QSAPPTKN:0123abcd',
+    );
+    my $hdr = $tok->_ua->default_header('Authorization') // '';
+    like $hdr, qr/^Basic \S+$/, 'Basic scheme';
+    (my $b64 = $hdr) =~ s/^Basic //;
+    is decode_base64($b64), 'c538eb34-app-key:QSAPPTKN:0123abcd',
+        'appKey and prefixed token joined verbatim (server splits on the first colon)';
+};
+
 # ---------------------------------------------------------------------------
 # 16. Logger injection
 # ---------------------------------------------------------------------------

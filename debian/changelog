@@ -1,3 +1,25 @@
+pve-storage-quantastor (1.0.1-1) unstable; urgency=medium
+
+  * v1.0.1 — stability and documentation release. Changes since 1.0.0:
+  * volume_snapshot_delete: retries a busy snapshot delete (err=493, "Dataset
+    is busy") for about three minutes instead of failing on the first refusal.
+    Appliances without the server-side fresh-snapshot fix refuse to destroy a
+    snapshot for a few minutes after creation; a single failure left the guest
+    in a snapshot-delete lock even though the same delete succeeds once the
+    window closes. Only err=493 is retried; other faults still fail fast.
+  * README: measured QuantaStor HA storage-pool failover behaviour — guests
+    see a 26-34 s I/O pause that does not scale with volume count, sessions
+    recover below the plugin, and no host- or guest-side SCSI timeout tuning
+    is needed (replacement_timeout's 120 s default governs). Stale
+    rollback-timeout wording corrected.
+  * README: architecture diagram (docs/architecture.svg) and corrected
+    content-type and volume_resize descriptions.
+  * README: upgrading from the patch-based v0.1 alpha — a leftover alpha
+    storage entry is inert on 1.0.0+, must not share a pool with a quantastor
+    storage, and is not a supported move-disk target.
+
+ -- OSNexus <support@osnexus.com>  Mon, 19 Oct 2026 17:21:18 +0000
+
 pve-storage-quantastor (1.0.0-1) unstable; urgency=medium
 
   * v1.0.0 — first general-availability release of the QuantaStor storage

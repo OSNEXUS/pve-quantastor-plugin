@@ -1,0 +1,128 @@
+<!--
+  Architecture diagram for the QuantaStor PVE plugin.
+  Render to PNG at 2x for docs (e.g. headless chromium screenshot at
+  deviceScaleFactor 2, viewport 1180x760 -> 2360x1520 PNG).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="760" viewBox="0 0 1180 760" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr-slate" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#475569"/>
+    </marker>
+    <marker id="arr-blue" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arr-amber" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#d97706"/>
+    </marker>
+  </defs>
+
+  <rect width="1180" height="760" fill="#ffffff"/>
+
+  <!-- ================= Proxmox VE node ================= -->
+  <rect x="20" y="20" width="520" height="720" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.5"/>
+  <text x="280" y="52" text-anchor="middle" font-size="20" font-weight="bold" fill="#1e293b">Proxmox VE node</text>
+
+  <!-- PVE storage layer -->
+  <rect x="60" y="75" width="440" height="70" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="280" y="103" text-anchor="middle" font-size="17" font-weight="bold" fill="#1e293b">PVE storage layer</text>
+  <text x="280" y="126" text-anchor="middle" font-size="13" fill="#475569">pvedaemon / pvestatd / qm / pct / web UI</text>
+
+  <line x1="280" y1="145" x2="280" y2="181" stroke="#475569" stroke-width="1.5" marker-end="url(#arr-slate)"/>
+  <text x="290" y="169" font-size="13" fill="#475569">storage hooks</text>
+
+  <!-- Plugin -->
+  <rect x="60" y="185" width="440" height="175" rx="6" fill="#ffffff" stroke="#0f766e" stroke-width="2.5"/>
+  <text x="280" y="213" text-anchor="middle" font-size="17" font-weight="bold" fill="#0f766e">QuantaStor storage plugin</text>
+  <text x="280" y="234" text-anchor="middle" font-size="13" fill="#475569">storage type 'quantastor' -- PVE::Storage::Custom::QuantaStor</text>
+
+  <rect x="80" y="255" width="190" height="85" rx="6" fill="#f0fdfa" stroke="#0f766e" stroke-width="1.5"/>
+  <text x="175" y="285" text-anchor="middle" font-size="15" font-weight="bold" fill="#1e293b">ISCSIManager.pm</text>
+  <text x="175" y="307" text-anchor="middle" font-size="13" fill="#475569">iscsiadm lifecycle</text>
+
+  <rect x="290" y="255" width="190" height="85" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="385" y="285" text-anchor="middle" font-size="15" font-weight="bold" fill="#1e293b">APIClient.pm</text>
+  <text x="385" y="307" text-anchor="middle" font-size="13" fill="#475569">REST client</text>
+
+  <!-- ISCSIManager -> initiator -->
+  <line x1="175" y1="340" x2="175" y2="391" stroke="#475569" stroke-width="1.5" marker-end="url(#arr-slate)"/>
+  <text x="185" y="360" font-size="13" fill="#475569">discover / login /</text>
+  <text x="185" y="377" font-size="13" fill="#475569">logout / rescan</text>
+
+  <!-- initiator -->
+  <rect x="80" y="395" width="190" height="75" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="175" y="425" text-anchor="middle" font-size="15" font-weight="bold" fill="#1e293b">open-iscsi initiator</text>
+  <text x="175" y="447" text-anchor="middle" font-size="13" fill="#475569">iscsid</text>
+
+  <!-- initiator -> device -->
+  <line x1="175" y1="470" x2="175" y2="506" stroke="#475569" stroke-width="1.5" marker-end="url(#arr-slate)"/>
+
+  <!-- device -->
+  <rect x="80" y="510" width="400" height="64" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="280" y="533" text-anchor="middle" font-size="14" font-weight="bold" fill="#1e293b">stable block device</text>
+  <text x="280" y="556" text-anchor="middle" font-size="12.5" font-family="Menlo, Consolas, monospace" fill="#475569">/dev/disk/by-path/ip-&lt;portal&gt;-iscsi-&lt;iqn&gt;-lun-0</text>
+
+  <!-- device -> consumers -->
+  <line x1="200" y1="574" x2="180" y2="606" stroke="#475569" stroke-width="1.5" marker-end="url(#arr-slate)"/>
+  <line x1="360" y1="574" x2="380" y2="606" stroke="#475569" stroke-width="1.5" marker-end="url(#arr-slate)"/>
+
+  <!-- consumers -->
+  <rect x="80" y="610" width="190" height="70" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="175" y="638" text-anchor="middle" font-size="15" font-weight="bold" fill="#1e293b">QEMU</text>
+  <text x="175" y="660" text-anchor="middle" font-size="13" fill="#475569">raw VM disk (images)</text>
+
+  <rect x="290" y="610" width="190" height="70" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="385" y="638" text-anchor="middle" font-size="15" font-weight="bold" fill="#1e293b">PVE::LXC</text>
+  <text x="385" y="660" text-anchor="middle" font-size="13" fill="#475569">ext4 rootfs (rootdir)</text>
+
+  <!-- ================= QuantaStor appliance ================= -->
+  <rect x="640" y="20" width="520" height="720" rx="10" fill="#f7fdf9" stroke="#15803d" stroke-width="1.5"/>
+  <text x="900" y="52" text-anchor="middle" font-size="20" font-weight="bold" fill="#14532d">QuantaStor appliance</text>
+
+  <!-- REST API -->
+  <rect x="680" y="255" width="200" height="85" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="780" y="285" text-anchor="middle" font-size="15" font-weight="bold" fill="#1e293b">REST API</text>
+  <text x="780" y="307" text-anchor="middle" font-size="13" fill="#475569">HTTPS :8153</text>
+
+  <!-- iSCSI target -->
+  <rect x="680" y="395" width="200" height="75" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+  <text x="780" y="420" text-anchor="middle" font-size="15" font-weight="bold" fill="#1e293b">iSCSI target</text>
+  <text x="780" y="440" text-anchor="middle" font-size="12.5" fill="#475569">one target per volume</text>
+  <text x="780" y="457" text-anchor="middle" font-size="12.5" fill="#475569">always LUN 0</text>
+
+  <!-- REST API -> target -->
+  <line x1="780" y1="340" x2="780" y2="391" stroke="#475569" stroke-width="1.5" marker-end="url(#arr-slate)"/>
+  <text x="790" y="370" font-size="13" fill="#475569">export / ACL</text>
+
+  <!-- REST API -> pool (elbow) -->
+  <path d="M880,297 L1010,297 L1010,506" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#arr-slate)"/>
+  <text x="1020" y="390" font-size="13" fill="#475569">create / delete</text>
+  <text x="1020" y="407" font-size="13" fill="#475569">snapshot / clone</text>
+  <text x="1020" y="424" font-size="13" fill="#475569">resize</text>
+
+  <!-- target -> pool -->
+  <line x1="780" y1="470" x2="780" y2="506" stroke="#475569" stroke-width="1.5" marker-end="url(#arr-slate)"/>
+
+  <!-- Storage pool -->
+  <rect x="680" y="510" width="440" height="170" rx="6" fill="#ffffff" stroke="#15803d" stroke-width="1.5"/>
+  <text x="900" y="538" text-anchor="middle" font-size="15" font-weight="bold" fill="#14532d">Storage pool</text>
+  <rect x="700" y="552" width="190" height="32" rx="4" fill="#f0fdf4" stroke="#86efac" stroke-width="1"/>
+  <text x="795" y="573" text-anchor="middle" font-size="12.5" font-family="Menlo, Consolas, monospace" fill="#1e293b">vm-100-disk-0</text>
+  <rect x="700" y="592" width="190" height="32" rx="4" fill="#f0fdf4" stroke="#86efac" stroke-width="1"/>
+  <text x="795" y="613" text-anchor="middle" font-size="12.5" font-family="Menlo, Consolas, monospace" fill="#1e293b">vm-100-disk-0_snap1</text>
+  <rect x="700" y="632" width="190" height="32" rx="4" fill="#f0fdf4" stroke="#86efac" stroke-width="1"/>
+  <text x="795" y="653" text-anchor="middle" font-size="12.5" font-family="Menlo, Consolas, monospace" fill="#1e293b">base-101-disk-0</text>
+  <text x="1000" y="605" text-anchor="middle" font-size="13" fill="#475569">thin-provisioned</text>
+  <text x="1000" y="622" text-anchor="middle" font-size="13" fill="#475569">block volumes</text>
+
+  <!-- ================= cross-plane arrows ================= -->
+  <!-- control plane: APIClient -> REST API -->
+  <line x1="480" y1="297" x2="676" y2="297" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arr-blue)"/>
+  <text x="578" y="283" text-anchor="middle" font-size="14" font-weight="bold" fill="#2563eb">control plane</text>
+  <text x="578" y="318" text-anchor="middle" font-size="12.5" fill="#2563eb">provision / snapshot /</text>
+  <text x="578" y="334" text-anchor="middle" font-size="12.5" fill="#2563eb">clone / resize / ACL</text>
+
+  <!-- data plane: initiator <-> target -->
+  <line x1="270" y1="432" x2="676" y2="432" stroke="#d97706" stroke-width="3" marker-end="url(#arr-amber)"/>
+  <text x="475" y="418" text-anchor="middle" font-size="14" font-weight="bold" fill="#d97706">data plane -- guest I/O</text>
+  <text x="475" y="452" text-anchor="middle" font-size="12.5" fill="#b45309">iSCSI TCP :3260</text>
+</svg>
