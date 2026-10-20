@@ -36,6 +36,11 @@ case "$1" in
         inject_script_tag
         inject_scan_require
 
+        # Pick up /etc/multipath/conf.d/quantastor.conf.
+        if systemctl is-active --quiet multipathd 2>/dev/null; then
+            multipathd reconfigure >/dev/null 2>&1 || true
+        fi
+
         for svc in pvedaemon pveproxy pvestatd; do
             if systemctl is-active --quiet "$svc" 2>/dev/null; then
                 systemctl restart "$svc" || true

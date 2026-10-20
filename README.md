@@ -13,7 +13,7 @@ storage backend for virtual machines and containers.
 | `QuantaStor/APIClient.pm` | Complete — clean REST client, 50 unit tests |
 | `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 61 unit tests |
 | `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 80 unit tests |
-| Debian packaging | Complete — `pve-storage-quantastor_1.1.0-1_all.deb` |
+| Debian packaging | Complete — `pve-storage-quantastor_1.1.1-1_all.deb` |
 
 ---
 
@@ -96,6 +96,8 @@ PVE volume names follow the standard Proxmox convention:
 │       ├── MockUA.pm                 Mock LWP::UserAgent for APIClient tests
 │       └── MockCmdRunner.pm          Mock command runner for ISCSIManager tests
 ├── debian/                           Debian packaging
+├── multipath/
+│   └── quantastor.conf               multipathd device section (installed to /etc/multipath/conf.d/)
 ├── www/
 │   └── quantastor-storage.js         PVE web UI panel (injected by postinst)
 ├── build-deb.sh                      Build the .deb package
@@ -108,12 +110,17 @@ PVE volume names follow the standard Proxmox convention:
 
 ### Package install (recommended)
 
-Download the latest `.deb` from the releases page and install it on each PVE node:
+Download the latest `.deb` from the releases page and install it on each PVE node
+with `apt`, which also installs the packages it depends on (`open-iscsi`,
+`multipath-tools`):
 
 ```bash
-dpkg -i pve-storage-quantastor_1.1.0-1_all.deb
+apt install ./pve-storage-quantastor_1.1.1-1_all.deb
 # PVE services are restarted automatically by postinst
 ```
+
+`dpkg -i` does not install dependencies: on a node that lacks one, it stops with
+"dependency problems - leaving unconfigured". Run `apt -f install` to finish.
 
 The `quantastor` storage type will appear in the PVE UI immediately after the browser
 is refreshed. The package includes two dpkg file triggers: one on `index.html.tpl`
@@ -126,7 +133,8 @@ upgraded). No manual reinstall is required after either upgrade.
 From 1.0.0 or later, install the current package directly on every node — there
 are no intermediate versions to step through, no migration steps, and existing
 storage entries keep working unchanged. Guests on the storage can keep running
-during the upgrade.
+during the upgrade. Use `apt install ./<package>.deb` as above: from 1.1.1 the
+package depends on `multipath-tools`, which `apt` installs on nodes that lack it.
 
 **Downgrading needs one step first if multipath is on.** Older releases do not
 know the `multipath` option. Before installing a 1.0.x package over 1.1.0 or
@@ -142,7 +150,7 @@ pvesm set <storeid> --delete multipath
 The archived v0.1 alpha (GitHub tag `v0.1-alpha`) worked by patching Proxmox's own
 storage modules and registered its storage as a `zfs` entry with
 `iscsiprovider quantastor`. Version 1.0.0 replaced that integration entirely and
-1.1.0 is the same first-class plugin, so on any node running 1.0.0 or later:
+1.1.1 is the same first-class plugin, so on any node running 1.0.0 or later:
 
 - **A leftover alpha storage entry is inert.** The Proxmox core patches it relied
   on do not survive a `pve-storage` upgrade, so the entry has no working provider
@@ -196,7 +204,7 @@ systemctl restart pvedaemon pveproxy pvestatd
 apt install debhelper
 
 bash build-deb.sh
-# Produces ../pve-storage-quantastor_1.1.0-1_all.deb
+# Produces ../pve-storage-quantastor_1.1.1-1_all.deb
 ```
 
 ---
@@ -372,17 +380,9 @@ single-path device. Deactivating, deleting, rolling back, templating or cloning
 a volume tears down or brings up every path, and an online resize rescans every
 path and grows the map.
 
-**Prerequisites, on every node:**
-
-1. Install `multipath-tools` (the package recommends it; the storage refuses to
-   activate with `multipath 1` if `multipathd` is missing):
-
-   ```bash
-   apt install multipath-tools
-   ```
-
-2. Add a device section for QuantaStor LUNs to `/etc/multipath.conf` and reload
-   with `multipathd reconfigure`:
+**Nothing to set up on the nodes.** The package depends on `multipath-tools` and
+installs a device section for QuantaStor LUNs as
+`/etc/multipath/conf.d/quantastor.conf`:
 
    ```
    devices {
@@ -397,7 +397,7 @@ path and grows the map.
    }
    ```
 
-   `no_path_retry 24` is not optional. multipathd shortens each iSCSI session's
+   Keep `no_path_retry`: multipathd shortens each iSCSI session's
    recovery timeout to 5 seconds so that a dead path is dropped quickly; without
    queueing, a moment when *every* path is down (a QuantaStor HA pool failover,
    a switch reboot) would fail guest I/O instead of pausing it. With this setting
@@ -406,8 +406,13 @@ path and grows the map.
 
    Nothing else needs configuring. Debian's defaults (`find_multipaths strict`,
    `user_friendly_names no`) mean multipathd only claims the LUNs the plugin
-   registers, never local disks, and the plugin addresses maps by WWID, so
-   `user_friendly_names` or aliases do not affect it.
+   registers for `multipath 1` storages, never local disks or other storage, and
+   the plugin addresses maps by WWID, so `user_friendly_names` or aliases do not
+   affect it. Storages without `multipath 1` are not touched.
+
+   The file is a conffile: local edits are kept across upgrades. If you added the
+   same section to `/etc/multipath.conf` for 1.1.0, it is now redundant and can be
+   removed (the `conf.d` entry takes precedence).
 
 **Enable it** on a new storage with `--multipath 1` on `pvesm add`, the
 *Multipath* checkbox under the Add dialog's advanced options, or on an existing
@@ -426,6 +431,22 @@ qm showcmd <vmid> | grep -o 'dm-uuid-mpath-[0-9a-f]*'
 Losing one path pauses I/O for about 15 seconds (the initiator's NOP-out timeout
 plus the 5 s recovery timeout) while the path is failed, then I/O continues on
 the remaining paths; the path is reinstated automatically when it comes back.
+
+**Give each path its own network.** Put the iSCSI ports on separate subnets,
+ideally separate switches or VLANs, so one failure takes out one path. If a
+node's iSCSI NICs share one layer-2 segment, Linux can answer ARP for one NIC's
+address on the other ("ARP flux"), and losing one NIC can then interrupt both
+paths: the queueing keeps guests running, but I/O pauses until the path
+recovers. On such nodes add this to a file in `/etc/sysctl.d/` and run
+`sysctl --system`:
+
+```
+net.ipv4.conf.all.arp_ignore = 1
+net.ipv4.conf.all.arp_announce = 2
+```
+
+Measured with two NICs on one segment: losing one NIC paused I/O for 43 s with
+the defaults (both paths dropped) and 15 s with these settings (one path kept).
 
 **Advertised portals the node cannot reach are skipped.** QuantaStor advertises
 every port that has iSCSI enabled, including ports on networks the Proxmox nodes

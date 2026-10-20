@@ -1,3 +1,16 @@
+pve-storage-quantastor (1.1.1-1) unstable; urgency=medium
+
+  * v1.1.1 — packaging. Changes since 1.1.0:
+  * The package now depends on multipath-tools (was Recommends) and installs
+    the QuantaStor device section as /etc/multipath/conf.d/quantastor.conf
+    (a conffile), so enabling multipath on a storage needs no node setup.
+    The section only applies to storages with multipath on: multipathd
+    claims a LUN only after the plugin whitelists its WWID.
+  * README: install with "apt install ./<package>.deb", which installs the
+    dependencies; dpkg -i needs "apt -f install" on a node that lacks one.
+
+ -- OSNexus <support@osnexus.com>  Tue, 20 Oct 2026 18:27:13 +0000
+
 pve-storage-quantastor (1.1.0-1) unstable; urgency=medium
 
   * v1.1.0 — iSCSI multipath. Changes since 1.0.1:
