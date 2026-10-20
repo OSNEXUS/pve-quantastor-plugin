@@ -15,6 +15,7 @@ Depends: ${misc:Depends},
  liburi-perl,
  libjson-pp-perl | libjson-perl,
  open-iscsi
+Recommends: multipath-tools
 Description: QuantaStor storage plugin for Proxmox VE
  Integrates QuantaStor managed storage appliances as a first-class iSCSI
  block storage backend for Proxmox VE virtual machines and containers.

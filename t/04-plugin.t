@@ -80,6 +80,7 @@ sub with_mocks {
             # wait_for_device call doesn't pay real-sleep cost. Individual tests
             # override this when they want to exercise the missing-device path.
             _path_exists    => sub { 1 },
+            _portal_reachable => sub { 1 },
         );
     };
 
@@ -1328,6 +1329,200 @@ subtest 'storage_can_replicate returns 0' => sub {
 
 # ---------------------------------------------------------------------------
 # 13. Container (LXC) rootdir support
+# ---------------------------------------------------------------------------
+# Multipath (storage option 'multipath')
+# ---------------------------------------------------------------------------
+
+my $MP_DESC = 'e773a0fc00fefb16ec9af814';
+my $MP_WWID = "362000000$MP_DESC";
+my $MP_DEV  = "/dev/disk/by-id/dm-uuid-mpath-$MP_WWID";
+my $MP_VOL  = { id => $VOL_UUID, name => 'vm-100-disk-0', iqn => $VOL_IQN, deviceDescriptor => $MP_DESC };
+my $MP_ST   = "$PORTAL:3260,1 $VOL_IQN\n10.0.1.1:3260,1 $VOL_IQN\n";
+my $MP_SESS = "tcp: [3] $PORTAL:3260,1 $VOL_IQN (non-flash)\ntcp: [5] 10.0.1.1:3260,1 $VOL_IQN (non-flash)\n";
+
+sub mp_scfg { return { %{ make_scfg() }, multipath => 1 } }
+
+# Index of the first recorded command whose signature matches.
+sub first_call {
+    my ($runner, $re) = @_;
+    my $calls = $runner->calls_made;
+    for my $i (0 .. $#$calls) { return $i if $calls->[$i]{sig} =~ $re }
+    return -1;
+}
+
+subtest 'multipath: path returns the dm device derived from deviceDescriptor' => sub {
+    with_mocks({ storageVolumeGet => $MP_VOL }, {}, sub {
+        my ($path) = $CLASS->path(mp_scfg(), 'vm-100-disk-0', 'qs1');
+        is $path, $MP_DEV, 'dm-uuid-mpath path, no session needed';
+    });
+};
+
+subtest 'multipath: path returns undef when the volume has no deviceDescriptor' => sub {
+    with_mocks({ storageVolumeGet => { id => $VOL_UUID, iqn => $VOL_IQN } }, {}, sub {
+        my ($path) = $CLASS->path(mp_scfg(), 'vm-100-disk-0', 'qs1');
+        ok !defined $path, 'undef, not a die';
+    });
+};
+
+subtest 'multipath off: path is unchanged (by-path)' => sub {
+    with_mocks({ storageVolumeGet => $MP_VOL }, {}, sub {
+        my ($path) = $CLASS->path(make_scfg(), 'vm-100-disk-0', 'qs1');
+        like $path, qr{^/dev/disk/by-path/ip-}, 'by-path';
+    });
+};
+
+subtest 'multipath: activate_volume logs in every portal and builds the map' => sub {
+    with_mocks(
+        { storageVolumeGet => $MP_VOL, storageVolumeAclAddRemoveEx => { status => 'ok' } },
+        { discovery => $MP_ST, session => { _error => 'No active sessions' } },
+        sub {
+            my ($ua, $runner) = @_;
+            ok $CLASS->activate_volume('qs1', mp_scfg(), 'vm-100-disk-0', undef, {}), 'activated';
+            is $runner->call_count_for('node --login'), 2, 'one login per portal';
+            ok $runner->was_called("-a $MP_WWID") && $runner->was_called($MP_WWID), 'map built';
+            ok !$runner->was_called('-r'), 'no host-wide multipath -r';
+        }
+    );
+};
+
+subtest 'multipath: re-activation with paths up issues no login' => sub {
+    with_mocks(
+        { storageVolumeGet => $MP_VOL, storageVolumeAclAddRemoveEx => { status => 'ok' } },
+        { discovery => $MP_ST, session => $MP_SESS },
+        sub {
+            my ($ua, $runner) = @_;
+            ok $CLASS->activate_volume('qs1', mp_scfg(), 'vm-100-disk-0', undef, {}), 'activated';
+            is $runner->call_count_for('node --login'), 0, 'idempotent';
+        }
+    );
+};
+
+subtest 'multipath: deactivate_volume flushes the map before logging out' => sub {
+    with_mocks(
+        {
+            storageVolumeGet            => $MP_VOL,
+            hostGet                     => { id => $HOST_UUID },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+        },
+        { session => [ $MP_SESS, { _error => 'No active sessions' } ] },
+        sub {
+            my ($ua, $runner) = @_;
+            $CLASS->deactivate_volume('qs1', mp_scfg(), 'vm-100-disk-0', undef, {});
+            my $flush  = first_call($runner, qr/^-f \Q$MP_WWID\E$/);
+            my $logout = first_call($runner, qr/^node --logout$/);
+            ok $flush >= 0 && $logout > $flush, 'multipath -f before the first logout';
+            is $runner->call_count_for('node --logout'), 2, 'both paths logged out';
+            is $ua->params_for('storageVolumeAclAddRemoveEx')->{modType}, 1, 'ACL removed';
+        }
+    );
+};
+
+subtest 'multipath: volume_resize rescans every path and resizes the map' => sub {
+    with_mocks(
+        { storageVolumeGet => $MP_VOL, storageVolumeResize => { task => { id => 'task-1' } } },
+        { session => $MP_SESS },
+        sub {
+            my ($ua, $runner) = @_;
+            $CLASS->volume_resize(mp_scfg(), 'qs1', 'vm-100-disk-0', 6 * 1024**3, 1);
+            ok $runner->was_called('session -r 3 --rescan') && $runner->was_called('session -r 5 --rescan'),
+                'both sessions rescanned';
+            ok $runner->was_called("resize map $MP_WWID"), 'multipathd resize map';
+            ok !$runner->was_called('node --rescan'), 'not the single-portal rescan';
+        }
+    );
+};
+
+subtest 'multipath: volume_snapshot_rollback flushes and logs out every path' => sub {
+    with_mocks(
+        {
+            storageVolumeGet         => $MP_VOL,
+            sessionEnum              => [],
+            storageVolumeRollback    => { status => 'ok' },
+        },
+        { session => [ $MP_SESS, $MP_SESS, $MP_SESS, { _error => 'No active sessions' } ] },
+        sub {
+            my ($ua, $runner) = @_;
+            $CLASS->volume_snapshot_rollback(mp_scfg(), 'qs1', 'vm-100-disk-0', 'snap1');
+            ok $runner->was_called("-f $MP_WWID"), 'map flushed';
+            is $runner->call_count_for('node --logout'), 2, 'both paths logged out';
+        }
+    );
+};
+
+subtest 'multipath: free_image tears down every path' => sub {
+    with_mocks(
+        {
+            storageVolumeGet            => $MP_VOL,
+            hostGet                     => { id => $HOST_UUID },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            storageVolumeDelete         => { status => 'ok' },
+        },
+        { session => [ $MP_SESS, { _error => 'No active sessions' } ] },
+        sub {
+            my ($ua, $runner) = @_;
+            $CLASS->free_image('qs1', mp_scfg(), 'vm-100-disk-0', 0);
+            ok $runner->was_called("-f $MP_WWID"), 'map flushed';
+            is $runner->call_count_for('node --logout'), 2, 'both paths logged out';
+            ok $ua->was_called('storageVolumeDelete'), 'volume deleted';
+        }
+    );
+};
+
+subtest 'multipath: create_base takes every path down and brings the base up on every path' => sub {
+    my $base_iqn = 'iqn.2009-10.com.osnexus:pool:base-100-disk-0';
+    with_mocks(
+        {
+            storageVolumeGet => sub {
+                my ($p) = @_;
+                return ($p->{storageVolume} // '') =~ /^base-/
+                    ? { %$MP_VOL, name => 'base-100-disk-0', iqn => $base_iqn }
+                    : $MP_VOL;
+            },
+            hostGet                     => { id => $HOST_UUID },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            storageVolumeModify         => { id => $VOL_UUID },
+            storageVolumeSnapshot       => { id => 'tmpl-snap-uuid' },
+            sessionEnum                 => [],
+        },
+        {
+            session   => [ $MP_SESS, { _error => 'No active sessions' } ],
+            discovery => "$PORTAL:3260,1 $base_iqn\n10.0.1.1:3260,1 $base_iqn\n",
+        },
+        sub {
+            my ($ua, $runner) = @_;
+            is $CLASS->create_base('qs1', mp_scfg(), 'vm-100-disk-0'), 'base-100-disk-0', 'converted';
+            my $flush  = first_call($runner, qr/^-f \Q$MP_WWID\E$/);
+            my $logout = first_call($runner, qr/^node --logout$/);
+            ok $flush >= 0 && $logout > $flush, 'map flushed before logout';
+            is $runner->call_count_for('node --logout'), 2, 'both old paths logged out';
+            is $runner->call_count_for('node --login'), 2, 'base logged in on both portals';
+        }
+    );
+};
+
+subtest 'multipath: clone_image brings the clone up on every path' => sub {
+    my $clone_iqn = 'iqn.2009-10.com.osnexus:pool:vm-101-disk-0';
+    with_mocks(
+        {
+            storageVolumeClone          => { obj => { id => 'clone-uuid', iqn => $clone_iqn } },
+            storageVolumeGet            => { id => 'clone-uuid', iqn => $clone_iqn, deviceDescriptor => $MP_DESC },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            storageVolumeEnum           => [],
+        },
+        {
+            discovery => "$PORTAL:3260,1 $clone_iqn\n10.0.1.1:3260,1 $clone_iqn\n",
+            session   => { _error => 'No active sessions' },
+        },
+        sub {
+            my ($ua, $runner) = @_;
+            $CLASS->clone_image(mp_scfg(), 'qs1', 'base-100-disk-0', 101);
+            ok $ua->was_called('storageVolumeGet'), 'clone re-fetched for its deviceDescriptor';
+            is $runner->call_count_for('node --login'), 2, 'logged in on both portals';
+            ok $runner->was_called($MP_WWID), 'map built';
+        }
+    );
+};
+
 # ---------------------------------------------------------------------------
 
 subtest 'volume_snapshot_needs_fsfreeze returns 1' => sub {

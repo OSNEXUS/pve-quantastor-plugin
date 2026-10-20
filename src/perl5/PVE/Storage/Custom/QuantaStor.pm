@@ -18,7 +18,7 @@ if (eval { require PVE::SafeSyslog; 1 }) {
     $_syslog_fn = \&PVE::SafeSyslog::syslog;
 }
 
-our $VERSION = '1.0.1';
+our $VERSION = '1.1.0';
 
 =head1 NAME
 
@@ -212,9 +212,10 @@ sub properties {
             type        => 'boolean',
         },
         multipath => {
-            description => "Use DM-MPIO across all QuantaStor-advertised "
-                . "portals per LUN, passing /dev/mapper/<wwid> to the VM.",
-            type => 'boolean', default => 0,
+            description => 'Log in on every portal QuantaStor advertises for a '
+                . 'volume and use the DM-MPIO device (needs multipath-tools).',
+            type        => 'boolean',
+            default     => 0,
         },
     };
 }
@@ -241,7 +242,7 @@ sub options {
         content    => { optional => 1 },
         bwlimit    => { optional => 1 },
         shared     => { optional => 1 },   # see on_add_hook for default behavior
-	multipath  => { optional => 1 },
+        multipath  => { optional => 1 },
     };
 }
 
@@ -331,6 +332,44 @@ sub _iscsi {
         portal => $portal,
         logger => _logger($storeid),
     );
+}
+
+# SCSI WWID of a volume: QuantaStor exposes NAA 6 "62000000" + deviceDescriptor
+# on every path, so the multipath device can be named without a session.
+sub _wwid {
+    my ($vol) = @_;
+    my $d = $vol->{deviceDescriptor};
+    my $what = $vol->{name} // $vol->{id} // '?';
+    die "QuantaStor: volume '$what' has no deviceDescriptor — cannot derive "
+      . "its multipath WWID\n" unless defined $d && $d =~ /^[0-9a-fA-F]{24}$/;
+    return '3' . lc("62000000$d");
+}
+
+# Log in to a volume's target: every portal plus its dm map when multipath
+# is on, else the single configured portal (caller waits for the device).
+sub _login {
+    my ($scfg, $iscsi, $vol) = @_;
+    return $iscsi->login($vol->{iqn}) unless $scfg->{multipath};
+
+    $iscsi->login_all($vol->{iqn});
+    my $wwid = _wwid($vol);
+    die "QuantaStor: multipath map for '$vol->{name}' ($wwid) did not appear "
+      . "after 30s — check multipathd and /etc/multipath.conf\n"
+        unless $iscsi->add_map($wwid);
+    return 1;
+}
+
+# Log out of a volume's target and wait for the sessions to go. The dm map is
+# flushed first: a map left without paths queues I/O and can hang.
+sub _logout {
+    my ($scfg, $iscsi, $vol) = @_;
+    if ($scfg->{multipath}) {
+        $iscsi->flush_map(_wwid($vol)) if defined $vol->{deviceDescriptor};
+        $iscsi->logout_all($vol->{iqn});
+    } else {
+        $iscsi->logout($vol->{iqn});
+    }
+    return $iscsi->wait_for_logout($vol->{iqn});
 }
 
 # Strip the 'qs-' prefix QuantaStor prepends to pool UUIDs in some contexts.
@@ -480,13 +519,19 @@ sub path {
     # with a cryptic "target_iqn is required" — same contract as a missing vol.
     return (undef, $vmid, $vtype) unless defined $vol->{iqn} && length $vol->{iqn};
 
+    # Same contract for multipath: no descriptor means no derivable device.
+    return (undef, $vmid, $vtype)
+        if $scfg->{multipath} && !defined $vol->{deviceDescriptor};
+
     my $iscsi = _iscsi($scfg, $storeid);
 
     # QuantaStor presents each volume as a dedicated iSCSI target at LUN 0
     # on the wire. The 'lun' field in volume_get is an internal QuantaStor
     # concept (position within a host group) and does not match the actual
-    # iSCSI LUN number seen by the initiator.
-    my $path = $iscsi->device_path($vol->{iqn}, 0);
+    # iSCSI LUN number seen by the initiator. With multipath, the dm device.
+    my $path = $scfg->{multipath}
+        ? $iscsi->map_path(_wwid($vol))
+        : $iscsi->device_path($vol->{iqn}, 0);
 
     return ($path, $vmid, $vtype);
 }
@@ -527,6 +572,10 @@ sub activate_storage {
 
     # Verify connectivity — will die on network/auth failure.
     $client->pool_get(_raw_pool_id($scfg->{pool_id}));
+
+    die "QuantaStor storage '$storeid': multipath is enabled but multipath-tools "
+      . "is not installed on this node (apt install multipath-tools)\n"
+        if $scfg->{multipath} && !grep { -x "$_/multipathd" } qw(/usr/sbin /sbin);
 
     # Register this node as a QuantaStor host if it isn't already.
     my $iqn      = $iscsi->get_initiator_iqn();
@@ -598,25 +647,19 @@ sub activate_volume {
     }
     die $acl_err unless $acl_added;
 
-    if ($scfg->{multipath}) {
-        $iscsi->login_all($vol->{iqn});
-        my $mapper = $iscsi->wait_for_mapper($vol->{iqn}, 0, 30);
-        die "QuantaStor activate_volume: multipath map for '$vol->{iqn}' didn't "
-          . "appear after 30s — check multipathd + /etc/multipath.conf\n"
-            unless $mapper;
-	} else {
+    # With multipath, _login already waited for the dm map.
+    _login($scfg, $iscsi, $vol);
+    return 1 if $scfg->{multipath};
 
-        $iscsi->login($vol->{iqn});
-
-        # Wait for the by-path symlink before returning. PVE expects activate_volume
-        # to leave the device usable; if we return before udev creates the symlink,
-        # QEMU fails to open the disk with a confusing low-level error.
-        unless ($iscsi->wait_for_device($vol->{iqn}, 0)) {
-            my $dev = $iscsi->device_path($vol->{iqn}, 0);
-            die "QuantaStor activate_volume: iSCSI device '$dev' did not appear "
-              . "after 30s — check that iscsid is running and the LUN is exported\n";
-        }
+    # Wait for the by-path symlink before returning. PVE expects activate_volume
+    # to leave the device usable; if we return before udev creates the symlink,
+    # QEMU fails to open the disk with a confusing low-level error.
+    unless ($iscsi->wait_for_device($vol->{iqn}, 0)) {
+        my $dev = $iscsi->device_path($vol->{iqn}, 0);
+        die "QuantaStor activate_volume: iSCSI device '$dev' did not appear "
+          . "after 30s — check that iscsid is running and the LUN is exported\n";
     }
+
     return 1;
 }
 
@@ -644,14 +687,8 @@ sub deactivate_volume {
     my $iqn  = $iscsi->get_initiator_iqn();
     my $host = $client->host_get($iqn);
 
-
-    if ($scfg->{multipath}) {
-        $iscsi->logout_all($vol->{iqn});
-    } else {
-        # Logout first, then remove ACL — reverse of activate_volume.
-        $iscsi->logout($vol->{iqn});
-        $iscsi->wait_for_logout($vol->{iqn});
-    }
+    # Logout first, then remove ACL — reverse of activate_volume.
+    _logout($scfg, $iscsi, $vol);
 
     $client->volume_acl_remove($vol->{id}, $host->{id}) if $host;
 
@@ -718,8 +755,7 @@ sub free_image {
         my $iqn  = $iscsi->get_initiator_iqn();
         my $host = $client->host_get($iqn);
 
-        $iscsi->logout($vol->{iqn});
-        $iscsi->wait_for_logout($vol->{iqn});
+        _logout($scfg, $iscsi, $vol);
         $client->volume_acl_remove($vol->{id}, $host->{id}) if $host;
     };
     warn "free_image teardown warning for '$volname': $@" if $@;
@@ -782,6 +818,11 @@ sub volume_resize {
     # (stopped) would then see the stale size. rescan is a no-op when no
     # session is active.
     my $iscsi = _iscsi($scfg, $storeid);
+    if ($scfg->{multipath}) {
+        # Every path must see the new size before the map can grow.
+        $iscsi->resize_map(_wwid($vol)) if $iscsi->rescan_all($vol->{iqn});
+        return $size;
+    }
     unless ($iscsi->rescan($vol->{iqn})) {
         warn "volume_resize: rescan failed for '$name' — "
            . "kernel LUN geometry may be stale; QEMU block_resize may fail\n";
@@ -919,10 +960,7 @@ sub volume_snapshot_rollback {
     # session may still be lingering (kernel session outlives the QEMU process).
     # Log out so QuantaStor will accept the rollback on an otherwise-idle target.
     # Do NOT re-login here — PVE calls activate_volume when the VM next starts.
-    if ($iscsi->is_logged_in($vol->{iqn})) {
-        $iscsi->logout($vol->{iqn});
-        $iscsi->wait_for_logout($vol->{iqn});
-    }
+    _logout($scfg, $iscsi, $vol) if $iscsi->is_logged_in($vol->{iqn});
 
     # PVE-side logout returns before QuantaStor's server-side session tracker
     # GCs the connection. Volume rollback rejects on an active QS session, so
@@ -976,8 +1014,7 @@ sub create_base {
     my $host = $client->host_get($iqn);
 
     # Take offline.
-    $iscsi->logout($vol->{iqn});
-    $iscsi->wait_for_logout($vol->{iqn});
+    _logout($scfg, $iscsi, $vol);
     $client->volume_acl_remove($vol->{id}, $host->{id}) if $host;
 
     # Wait for QuantaStor to GC its server-side view of the session before
@@ -999,11 +1036,11 @@ sub create_base {
     # rather than relying on volume_modify's return shape, which varies across
     # QS versions (bare object vs task-wrapper vs iqn absent).
     $client->volume_modify($vol->{id}, $newname);
-    my $new_iqn = $client->volume_get($newname)->{iqn};
+    my $new_vol = $client->volume_get($newname);
 
     # Re-grant access and bring online.
     $client->volume_acl_add($vol->{id}, $iqn);
-    $iscsi->login($new_iqn);
+    _login($scfg, $iscsi, $new_vol);
 
     # Create the template snapshot that clone_image will clone from.
     my $template_snap = "template-$newname";
@@ -1040,9 +1077,11 @@ sub clone_image {
     # The clone API returns { obj => { id => ..., iqn => ... } } on success.
     my $new_vol = (ref $result eq 'HASH' && $result->{obj}) ? $result->{obj} : $result;
 
-    # Grant access and login to the new clone.
+    # Grant access and login to the new clone. Multipath needs the clone's
+    # deviceDescriptor, which the clone response may not carry.
     $client->volume_acl_add($new_vol->{id}, $iqn);
-    $iscsi->login($new_vol->{iqn});
+    $new_vol = $client->volume_get($newname) if $scfg->{multipath};
+    _login($scfg, $iscsi, $new_vol);
 
     return $newname;
 }

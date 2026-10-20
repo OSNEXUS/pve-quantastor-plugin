@@ -206,6 +206,13 @@ Ext.define('PVE.storage.QuantaStorInputPanel', {
 		emptyText: gettext('defaults to API Host'),
 		allowBlank: true,
 	    },
+	    {
+		xtype: 'proxmoxcheckbox',
+		name: 'multipath',
+		uncheckedValue: 0,
+		defaultValue: 0,
+		fieldLabel: gettext('Multipath'),
+	    },
 	];
 
 	me.advancedColumn2 = [
