@@ -58,7 +58,13 @@ sub make_scfg {
 sub with_mocks {
     my ($ua_responses, $cmd_responses, $test_sub) = @_;
 
-    my $ua     = Test::QuantaStor::MockUA->new(responses => $ua_responses);
+    # Default to a reachable, empty pool; list_images (and so find_free_diskname)
+    # dies on a failed lookup. Tests override either response as needed.
+    my $ua     = Test::QuantaStor::MockUA->new(responses => {
+        storagePoolGet    => { id => $POOL_UUID, size => 1024, freeSpace => 512 },
+        storageVolumeEnum => [],
+        %$ua_responses,
+    });
     my $runner = Test::QuantaStor::MockCmdRunner->new(responses => $cmd_responses // {});
 
     # Override the internal factory helpers for the duration of this call.
@@ -402,9 +408,18 @@ subtest 'path always uses lun-0 regardless of API lun field' => sub {
     );
 };
 
-subtest 'path dies on snapshot access' => sub {
-    eval { $CLASS->path(make_scfg(), 'vm-100-disk-0', 'qs1', 'snap1') };
-    like $@, qr/snapshot access not supported/, 'dies for snapshot path';
+subtest 'path resolves a snapshot to its own volume' => sub {
+    with_mocks(
+        { storageVolumeGet => { id => 'snap-vol-uuid', iqn => "$VOL_IQN-snap" } },
+        {},
+        sub {
+            my ($ua) = @_;
+            my ($path) = $CLASS->path(make_scfg(), 'vm-100-disk-0', 'qs1', 'vzdump');
+            is $ua->params_for('storageVolumeGet')->{storageVolume},
+                'vm-100-disk-0_vzdump', 'looked up the snapshot volume';
+            like $path, qr{-iscsi-\Q$VOL_IQN-snap\E-lun-0$}, 'path of the snapshot LUN';
+        }
+    );
 };
 
 subtest 'path returns undef device for missing volume (delete preflight)' => sub {
@@ -484,6 +499,32 @@ subtest 'activate_storage is idempotent when host exists' => sub {
     );
 };
 
+# An unreadable listing must not look empty: find_free_diskname would then
+# hand out a name that already exists.
+subtest 'list_images dies when the pool lookup fails' => sub {
+    with_mocks(
+        { storagePoolGet => { _http_error => '500 Server Error' } },
+        {},
+        sub {
+            my ($ua) = @_;
+            eval { $CLASS->list_images('qs1', make_scfg(), 100, undef, {}) };
+            like $@, qr/storagePoolGet/, 'pool lookup error surfaces';
+            ok !$ua->was_called('storageVolumeEnum'), 'did not fall back to an unfiltered listing';
+        }
+    );
+};
+
+subtest 'list_images dies when the volume enum fails' => sub {
+    with_mocks(
+        { storageVolumeEnum => { RestError => 'Internal error [err=1]' } },
+        {},
+        sub {
+            eval { $CLASS->list_images('qs1', make_scfg(), 100, undef, {}) };
+            like $@, qr/storageVolumeEnum/, 'enum error surfaces instead of an empty list';
+        }
+    );
+};
+
 # ---------------------------------------------------------------------------
 # 8. alloc_image / free_image
 # ---------------------------------------------------------------------------
@@ -516,6 +557,71 @@ subtest 'alloc_image honors sparse 0 (thick provisioning opt-out)' => sub {
             $CLASS->alloc_image('qs1', $scfg, 100, 'raw', undef, 10240);
             my $params = $ua->params_for('storageVolumeCreate');
             is $params->{thinProvisioned}, 'false', 'thick provisioning requested';
+        }
+    );
+};
+
+# A just-created volume can be missing from the enum find_free_diskname reads,
+# so an auto-picked name may already exist; QuantaStor refuses it with err=9.
+my $EXISTS_ERR = 'A storage volume with the specified name already exists on storage pool. [err=9]';
+
+subtest 'alloc_image moves to the next disk number when an auto-picked name exists' => sub {
+    my @tried;
+    with_mocks(
+        {
+            storageVolumeCreate => sub {
+                my ($params) = @_;
+                push @tried, $params->{name};
+                return @tried < 3 ? { RestError => $EXISTS_ERR } : { id => $VOL_UUID };
+            },
+        },
+        {},
+        sub {
+            my $name = $CLASS->alloc_image('qs1', make_scfg(), 100, 'raw', undef, 10240);
+            is_deeply \@tried, [qw(vm-100-disk-0 vm-100-disk-1 vm-100-disk-2)],
+                'tried consecutive disk numbers';
+            is $name, 'vm-100-disk-2', 'returned the name that was created';
+        }
+    );
+};
+
+subtest 'alloc_image does not rename a caller-chosen name that exists' => sub {
+    my $calls = 0;
+    with_mocks(
+        { storageVolumeCreate => sub { $calls++; return { RestError => $EXISTS_ERR } } },
+        {},
+        sub {
+            eval { $CLASS->alloc_image('qs1', make_scfg(), 100, 'raw', 'vm-100-cloudinit', 4096) };
+            like $@, qr/err=9/, 'existing caller-chosen name surfaces as an error';
+            is $calls, 1, 'no retry under a different name';
+        }
+    );
+};
+
+subtest 'alloc_image gives up after the name budget' => sub {
+    my $calls = 0;
+    with_mocks(
+        { storageVolumeCreate => sub { $calls++; return { RestError => $EXISTS_ERR } } },
+        {},
+        sub {
+            no warnings 'once';   # fully-qualified knob referenced once here
+            local $PVE::Storage::Custom::QuantaStor::ALLOC_NAME_ATTEMPTS = 3;
+            eval { $CLASS->alloc_image('qs1', make_scfg(), 100, 'raw', undef, 10240) };
+            like $@, qr/err=9/, 'surfaces the final error';
+            is $calls, 3, 'stopped at the configured attempt budget';
+        }
+    );
+};
+
+subtest 'alloc_image does not retry other create failures' => sub {
+    my $calls = 0;
+    with_mocks(
+        { storageVolumeCreate => sub { $calls++; return { RestError => 'Insufficient space in pool [err=12]' } } },
+        {},
+        sub {
+            eval { $CLASS->alloc_image('qs1', make_scfg(), 100, 'raw', undef, 10240) };
+            like $@, qr/err=12/, 'error surfaces as-is';
+            is $calls, 1, 'failed fast';
         }
     );
 };
@@ -814,9 +920,21 @@ subtest 'activate_volume gives up after the retry budget' => sub {
     );
 };
 
-subtest 'activate_volume dies on snapshot' => sub {
-    eval { $CLASS->activate_volume('qs1', make_scfg(), 'vm-100-disk-0', 'snap1', {}) };
-    like $@, qr/snapshot activation not supported/, 'dies for snapshot';
+subtest 'activate_volume on a snapshot activates the snapshot volume' => sub {
+    with_mocks(
+        {
+            storageVolumeGet            => { id => 'snap-vol-uuid', iqn => "$VOL_IQN-snap" },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+        },
+        { 'discovery' => '', 'node --login' => '' },
+        sub {
+            my ($ua, $runner) = @_;
+            $CLASS->activate_volume('qs1', make_scfg(), 'vm-100-disk-0', 'vzdump', {});
+            is $ua->params_for('storageVolumeGet')->{storageVolume},
+                'vm-100-disk-0_vzdump', 'activated the snapshot volume';
+            ok $runner->was_called('node --login'), 'iSCSI login called';
+        }
+    );
 };
 
 subtest 'activate_volume dies when device symlink never appears' => sub {
@@ -993,6 +1111,26 @@ subtest 'volume_snapshot_delete removes snap volume' => sub {
             $CLASS->volume_snapshot_delete(make_scfg(), 'qs1', 'vm-100-disk-0', 'snap1', 0);
             my $get_p = $ua->params_for('storageVolumeGet');
             is $get_p->{storageVolume}, 'vm-100-disk-0_snap1', 'fetched correct snap volume';
+            ok $ua->was_called('storageVolumeDelete'), 'delete called';
+        }
+    );
+};
+
+subtest 'volume_snapshot_delete deactivates a snapshot this node has mounted' => sub {
+    my @deact;
+    no warnings 'redefine';
+    local *PVE::Storage::Custom::QuantaStor::deactivate_volume = sub { shift; push @deact, [@_] };
+    with_mocks(
+        {
+            storageVolumeGet    => { id => 'snap-vol-uuid', iqn => "$VOL_IQN-snap" },
+            storageVolumeDelete => { status => 'ok' },
+        },
+        { 'session' => "tcp: [1] $PORTAL:3260,1 $VOL_IQN-snap (non-flash)\n" },
+        sub {
+            my ($ua) = @_;
+            $CLASS->volume_snapshot_delete(make_scfg(), 'qs1', 'vm-100-disk-0', 'vzdump', 0);
+            is scalar(@deact), 1, 'deactivated before delete';
+            is $deact[0][3], 'vzdump', 'deactivated the snapshot, not the volume';
             ok $ua->was_called('storageVolumeDelete'), 'delete called';
         }
     );
@@ -1321,6 +1459,13 @@ subtest 'volume_has_feature clone only on base' => sub {
         'clone supported on base';
     ok !$CLASS->volume_has_feature(make_scfg(), 'clone', 'qs1', 'vm-100-disk-0'),
         'clone not supported on current';
+};
+
+subtest 'volume_has_feature copy from a snapshot (full clone from snapshot)' => sub {
+    ok $CLASS->volume_has_feature(make_scfg(), 'copy', 'qs1', 'vm-100-disk-0', 'snap1'),
+        'copy supported on a snapshot';
+    ok !$CLASS->volume_has_feature(make_scfg(), 'clone', 'qs1', 'vm-100-disk-0', 'snap1'),
+        'linked clone from a snapshot still unsupported';
 };
 
 subtest 'storage_can_replicate returns 0' => sub {
