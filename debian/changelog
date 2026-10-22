@@ -1,3 +1,24 @@
+pve-storage-quantastor (1.1.2-1) unstable; urgency=medium
+
+  * v1.1.2 — fix. Changes since 1.1.1:
+  * Container backup in snapshot mode (the default for backup jobs) failed
+    with "snapshot activation not supported on quantastor storage". The
+    plugin now activates, maps and deactivates a QuantaStor snapshot as its
+    own volume, so vzdump can mount the temporary snapshot read-only, and
+    logs out of a mounted snapshot before deleting it. VM backups, and
+    container backups in suspend or stop mode, were not affected.
+    The same change fixes "pct clone --full --snapname" of a container.
+  * Full clone of a VM from a snapshot ("qm clone --full --snapname") is now
+    supported; it was refused with "Full clone feature is not supported for
+    a snapshot".
+  * Creating a disk could fail with "A storage volume with the specified
+    name ... already exists [err=9]" when the disk name was chosen from a
+    volume list that did not yet show a volume created moments earlier.
+    The plugin now moves on to the next disk number. A volume list that
+    cannot be read is reported as an error instead of an empty list.
+
+ -- OSNexus <support@osnexus.com>  Wed, 21 Oct 2026 18:00:00 +0000
+
 pve-storage-quantastor (1.1.1-1) unstable; urgency=medium
 
   * v1.1.1 — packaging. Changes since 1.1.0:

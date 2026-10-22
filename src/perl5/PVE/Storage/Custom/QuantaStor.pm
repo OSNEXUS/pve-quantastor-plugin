@@ -18,7 +18,7 @@ if (eval { require PVE::SafeSyslog; 1 }) {
     $_syslog_fn = \&PVE::SafeSyslog::syslog;
 }
 
-our $VERSION = '1.1.1';
+our $VERSION = '1.1.2';
 
 =head1 NAME
 
@@ -74,6 +74,10 @@ our $ACL_ADD_RETRY_SECS = 3;
 # server-side fix. Package vars so tests can localize them.
 our $SNAP_DELETE_ATTEMPTS   = 10;
 our $SNAP_DELETE_RETRY_SECS = 20;
+
+# Disk numbers alloc_image tries when an auto-picked name already exists
+# (err=9, see alloc_image). Package var so tests can localize it.
+our $ALLOC_NAME_ATTEMPTS = 5;
 
 # ---------------------------------------------------------------------------
 # Password file helpers
@@ -436,13 +440,10 @@ sub list_images {
 
     # pool_id in storage.cfg may be a name or a UUID. storagePoolId on volumes
     # is always a UUID, so resolve once via pool_get before filtering.
-    my $pool_uuid = eval {
-        $client->pool_get(_raw_pool_id($scfg->{pool_id}))->{id}
-    } // _raw_pool_id($scfg->{pool_id});
-    warn "QuantaStor list_images pool lookup error: $@" if $@;
-
-    my $all_vols = eval { $client->volume_enum() } // [];
-    warn "QuantaStor list_images error: $@" if $@;
+    # Lookup and enum errors propagate: an unreadable listing returned as empty
+    # makes find_free_diskname hand out names that are already taken.
+    my $pool_uuid = $client->pool_get(_raw_pool_id($scfg->{pool_id}))->{id};
+    my $all_vols  = $client->volume_enum();
 
     my $res = [];
 
@@ -495,16 +496,15 @@ sub list_images {
 Returns C<($device_path, $vmid, $vtype)>.
 
 The device path is the stable C</dev/disk/by-path/> symlink for the iSCSI LUN.
+With C<$snapname>, it is the path of that snapshot's own LUN.
 
 =cut
 
 sub path {
     my ($class, $scfg, $volname, $storeid, $snapname) = @_;
 
-    die "direct snapshot access not supported on quantastor storage\n"
-        if defined $snapname;
-
     my ($vtype, $name, $vmid) = $class->parse_volname($volname);
+    $name = _snap_vol_name($name, $snapname) if defined $snapname;
 
     # PVE's delete API handler calls path() BEFORE vdisk_free to look up
     # vtype/ownervm for permission checks. If the volume is already gone we
@@ -604,16 +604,17 @@ sub deactivate_storage {
 =head2 activate_volume($storeid, $scfg, $volname, $snapname, $cache)
 
 Grants this node access to the volume via ACL and logs in to the iSCSI target.
+With C<$snapname>, activates that snapshot's volume instead (vzdump snapshot
+mode mounts a container's snapshot read-only to back it up).
 
 =cut
 
 sub activate_volume {
     my ($class, $storeid, $scfg, $volname, $snapname, $cache) = @_;
 
-    die "snapshot activation not supported on quantastor storage\n"
-        if defined $snapname;
-
+    # A QuantaStor snapshot is a volume with its own iSCSI target.
     my $name   = _bare_name($class, $volname);
+    $name      = _snap_vol_name($name, $snapname) if defined $snapname;
     my $client = _client($scfg, $storeid);
     my $iscsi  = _iscsi($scfg, $storeid);
 
@@ -672,10 +673,8 @@ Logs out of the iSCSI target and revokes ACL access for this node.
 sub deactivate_volume {
     my ($class, $storeid, $scfg, $volname, $snapname, $cache) = @_;
 
-    die "snapshot deactivation not supported on quantastor storage\n"
-        if defined $snapname;
-
     my $name   = _bare_name($class, $volname);
+    $name      = _snap_vol_name($name, $snapname) if defined $snapname;
     my $client = _client($scfg, $storeid);
     my $iscsi  = _iscsi($scfg, $storeid);
 
@@ -718,15 +717,24 @@ sub alloc_image {
     die "illegal name '$name' — should be 'vm-$vmid-*'\n"
         if $name && $name !~ m/^vm-$vmid-/;
 
+    my $auto = !defined $name;
     $name //= $class->find_free_diskname($storeid, $scfg, $vmid, $fmt);
 
     my $client   = _client($scfg, $storeid);
     my $pool_raw = _raw_pool_id($scfg->{pool_id});
 
-    # Default to thin; 'sparse 0' in storage.cfg opts into thick (100% reserved).
-    $client->volume_create($name, $size, $pool_raw, thin => $scfg->{sparse} // 1);
-
-    return $name;
+    # A volume created moments ago can be missing from the enum that
+    # find_free_diskname reads, so an auto-picked name may already exist.
+    # QuantaStor refuses it with err=9; move on to the next disk number.
+    for my $attempt (1 .. $ALLOC_NAME_ATTEMPTS) {
+        # Default to thin; 'sparse 0' in storage.cfg opts into thick (100% reserved).
+        eval { $client->volume_create($name, $size, $pool_raw, thin => $scfg->{sparse} // 1) };
+        return $name unless $@;
+        die $@ unless $auto && $@ =~ /err=9\b/ && $attempt < $ALLOC_NAME_ATTEMPTS;
+        _logger($storeid)->(warning =>
+            "alloc_image: '$name' already exists on QuantaStor, trying the next disk number");
+        $name =~ s/(\d+)$/$1 + 1/e;
+    }
 }
 
 =head2 free_image($storeid, $scfg, $volname, $isBase)
@@ -869,6 +877,11 @@ sub volume_snapshot_delete {
     # Idempotent: if the snapshot is already gone, treat as success.
     my $snap_vol = $client->volume_get_or_undef($snap_name);
     return undef unless $snap_vol;
+
+    # vzdump never deactivates the snapshot it mounted; drop our session first.
+    $class->deactivate_volume($storeid, $scfg, $volname, $snap)
+        if defined $snap_vol->{iqn}
+        && _iscsi($scfg, $storeid)->is_logged_in($snap_vol->{iqn});
 
     # Force-delete: PVE expects volume_snapshot_delete to remove the snapshot
     # even if QuantaStor considers it busy.
@@ -1106,7 +1119,7 @@ sub volume_has_feature {
         snapshot  => { current => 1, snap => 1 },
         clone     => { base    => 1 },
         template  => { current => 1 },
-        copy      => { base    => 1, current => 1 },
+        copy      => { base    => 1, current => 1, snap => 1 },
         sparseinit => { base   => 1, current => 1 },
     };
 

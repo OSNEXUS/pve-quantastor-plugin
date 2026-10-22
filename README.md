@@ -13,7 +13,7 @@ storage backend for virtual machines and containers.
 | `QuantaStor/APIClient.pm` | Complete — clean REST client, 50 unit tests |
 | `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 61 unit tests |
 | `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 80 unit tests |
-| Debian packaging | Complete — `pve-storage-quantastor_1.1.1-1_all.deb` |
+| Debian packaging | Complete — `pve-storage-quantastor_1.1.2-1_all.deb` |
 
 ---
 
@@ -115,7 +115,7 @@ with `apt`, which also installs the packages it depends on (`open-iscsi`,
 `multipath-tools`):
 
 ```bash
-apt install ./pve-storage-quantastor_1.1.1-1_all.deb
+apt install ./pve-storage-quantastor_1.1.2-1_all.deb
 # PVE services are restarted automatically by postinst
 ```
 
@@ -204,7 +204,7 @@ systemctl restart pvedaemon pveproxy pvestatd
 apt install debhelper
 
 bash build-deb.sh
-# Produces ../pve-storage-quantastor_1.1.1-1_all.deb
+# Produces ../pve-storage-quantastor_1.1.2-1_all.deb
 ```
 
 ---
@@ -520,6 +520,7 @@ Validated container lifecycle (PVE 9.1/9.2, two-node cluster):
 | `pct move-volume` | Both directions, to/from other storages; CT moves are file-level (rsync), not block copies |
 | Extra mount points | `pct set <ctid> -mp0 <storeid>:<size>,mp=/path` allocates a dedicated LUN per mount point |
 | Discard / TRIM | `pct fstrim <ctid>` returns freed space to the thin volume (verified end-to-end: ext4 → iSCSI UNMAP → pool) |
+| Backup (`vzdump`) | Snapshot, suspend and stop modes; snapshot mode logs in to a temporary QuantaStor snapshot and mounts it read-only |
 
 ### Container limitations
 
