@@ -11,6 +11,25 @@ One minor quirk: `qm template` (`create_base`) re-logins to the renamed
 coordinator node. PVE cleans this up automatically before any subsequent volume
 operation. It has no practical impact on cluster operations.
 
+## One storage pool per Proxmox cluster
+
+A QuantaStor storage pool must be used by only one Proxmox cluster. Separate
+clusters can share an appliance, but each one needs its own pool (see
+[Multiple Proxmox clusters on one appliance](configuration.md#multiple-proxmox-clusters-on-one-appliance)).
+
+The plugin gives a volume the same name on QuantaStor as it has in Proxmox, for
+example `vm-100-disk-0`. When it lists a pool's volumes, it reports every volume
+in that pool as belonging to the cluster that asked. VM IDs are only unique within
+one cluster. If two clusters share a pool, both can have a VM 100, and each
+cluster sees the other's `vm-100-*` disks as its own:
+
+- `qm disk rescan` attaches the other cluster's disks to the local VM with the
+  same ID, as unused disks.
+- Destroying a VM and removing its unreferenced disks deletes the other cluster's
+  disks for that VM ID. **This loses data.**
+
+Sharing one pool between clusters is not supported.
+
 ## QuantaStor HA pool failover pauses guest I/O
 
 If the storage is backed by a QuantaStor **HA storage pool** — a failover group

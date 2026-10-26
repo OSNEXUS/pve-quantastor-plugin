@@ -156,6 +156,42 @@ message. If it prints `[err=26]`, manually backfill the `.pw` file as in
 **err=26** above. If it prints a network/SSL error, the inactive node
 cannot reach `api_host:8153` — check firewall/routing, not the plugin.
 
+## Storage only works on one cluster at a time
+
+Symptom: two Proxmox clusters, or two nodes, use the same QuantaStor appliance.
+Only one of them can reach the storage at a time, and shutting one down makes
+the other work. Guests may also see I/O errors or stalls whenever the other
+side starts a VM or stops one.
+
+Cause: the nodes share an iSCSI initiator name. That usually happens when they
+were cloned from the same template. The plugin registers each node with
+QuantaStor by its initiator name, so QuantaStor sees both nodes as one host.
+Their iSCSI sessions to the same volume can knock each other off, and when
+one side detaches a volume, the access it removes is access the other side is
+still using.
+
+Check every node of every cluster:
+
+```bash
+cat /etc/iscsi/initiatorname.iscsi
+```
+
+On QuantaStor, `qs host-list` shows one host per initiator name. If a node is
+missing from that list, it is sharing another node's initiator name.
+
+Fix: give every node except one a new, unique name. Do it one node at a time,
+on a node that has no running guests using this storage (migrate them off
+first), because restarting `iscsid` drops the node's iSCSI sessions:
+
+```bash
+echo "InitiatorName=$(iscsi-iname)" > /etc/iscsi/initiatorname.iscsi
+systemctl restart iscsid
+pvesm status    # re-registers the node with QuantaStor under its new name
+```
+
+Run `qs host-list` again on QuantaStor and confirm each node now has its own
+host entry.
+
 ## A `qm move-disk` or VM migration to another cluster node fails
 
 **First, verify the plugin is loaded on the destination:**
