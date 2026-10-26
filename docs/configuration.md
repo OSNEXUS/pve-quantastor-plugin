@@ -158,6 +158,29 @@ the pool is exported and re-imported. See
 under Known Limitations for the measured behaviour, and for the one initiator
 setting you should not change.
 
+## Multiple Proxmox clusters on one appliance
+
+Several separate Proxmox clusters can use the same QuantaStor appliance at the
+same time, as long as you follow two rules:
+
+- **Give each Proxmox cluster its own QuantaStor storage pool.** Point each
+  cluster's `pool_id` at a different pool. Never configure two clusters against
+  the same pool. Volumes are named after VM IDs, so two clusters on one pool will
+  see each other's disks as their own. See
+  [One storage pool per Proxmox cluster](limitations.md#one-storage-pool-per-proxmox-cluster).
+- **Give every node a unique iSCSI initiator name, across all clusters.**
+  QuantaStor grants volume access per initiator name. If two nodes share an
+  initiator name, QuantaStor treats them as one host. That is common when nodes
+  are cloned from the same template. Compare the names on every node of every
+  cluster:
+
+  ```bash
+  cat /etc/iscsi/initiatorname.iscsi
+  ```
+
+  If any two nodes match, see
+  [Storage only works on one cluster at a time](troubleshooting.md#storage-only-works-on-one-cluster-at-a-time).
+
 ## Multipath
 
 To use every iSCSI portal QuantaStor advertises, set `multipath 1` on the storage. Setup, path behavior and network layout are in [Multipath (DM-MPIO)](multipath.md).

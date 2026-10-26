@@ -48,11 +48,11 @@ Add → **QuantaStor**.
 | Topic | Covers |
 |---|---|
 | [Installation](docs/installation.md) | Package install, upgrading and downgrading, upgrading from the patch-based alpha, manual install, building the package |
-| [Configuration](docs/configuration.md) | Credentials, API tokens, the web UI and CLI options, QuantaStor HA storage pools, verifying the setup |
+| [Configuration](docs/configuration.md) | Credentials, API tokens, the web UI and CLI options, QuantaStor HA storage pools, multiple Proxmox clusters, verifying the setup |
 | [Multipath (DM-MPIO)](docs/multipath.md) | Using every iSCSI portal the appliance advertises, path loss behavior, network layout |
 | [Container (LXC) support](docs/containers.md) | How container volumes work and their limitations |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and how to resolve them |
-| [Known limitations and supported versions](docs/limitations.md) | Behavior to know about, supported Proxmox VE versions, mixed-version clusters |
+| [Known limitations and supported versions](docs/limitations.md) | Behavior to know about, one storage pool per Proxmox cluster, supported Proxmox VE versions, mixed-version clusters |
 | [Architecture](docs/architecture.md) | How the plugin sits between Proxmox VE and the QuantaStor REST API |
 | [Source layout and module reference](src/README.md) | What each file does, the Perl module interfaces, the PVE hooks |
 | [Running the tests](t/README.md) | Unit and integration tests |
