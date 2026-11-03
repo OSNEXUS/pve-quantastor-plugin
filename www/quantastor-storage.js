@@ -25,11 +25,21 @@ Ext.define('PVE.storage.QuantaStorInputPanel', {
 	    delete values.password;
 	}
 
+	// Optional; an empty prefix means none.
+	if (me.isCreate && !values.volume_prefix) {
+	    delete values.volume_prefix;
+	}
+
 	if (values.portal === '') {
 	    delete values.portal;
 	    if (!me.isCreate) {
 		values.delete = values.delete ? values.delete + ',portal' : 'portal';
 	    }
+	}
+
+	// iSCSI is the plugin default; keep storage.cfg minimal for the common case.
+	if (values.transport === 'iscsi') {
+	    delete values.transport;
 	}
 
 	return me.callParent([values]);
@@ -199,11 +209,34 @@ Ext.define('PVE.storage.QuantaStorInputPanel', {
 
 	me.advancedColumn1 = [
 	    {
+		// Fixed after creation (options() marks it fixed), so display-only on edit.
+		xtype: me.isCreate ? 'proxmoxKVComboBox' : 'displayfield',
+		name: 'transport',
+		value: 'iscsi',
+		deleteEmpty: false,
+		fieldLabel: gettext('Transport'),
+		comboItems: [
+		    ['iscsi', 'iSCSI'],
+		    ['fc', gettext('Fibre Channel')],
+		],
+	    },
+	    {
 		xtype: 'textfield',
 		name: 'portal',
 		value: '',
 		fieldLabel: gettext('iSCSI Portal'),
-		emptyText: gettext('defaults to API Host'),
+		emptyText: gettext('defaults to API Host; unused for Fibre Channel'),
+		allowBlank: true,
+	    },
+	    {
+		// Set only on add: changing it would orphan existing volumes.
+		xtype: me.isCreate ? 'textfield' : 'displayfield',
+		name: 'volume_prefix',
+		value: '',
+		fieldLabel: gettext('Volume Prefix'),
+		emptyText: gettext('none (one pool per cluster)'),
+		regex: /^(?!(?:base|basevol|vm|subvol)-\d)(?!.*(?:base|basevol|vm|subvol)-\d+-)(?!.*template-$)[A-Za-z0-9][A-Za-z0-9_.-]*$/,
+		maxLength: 32,
 		allowBlank: true,
 	    },
 	    {

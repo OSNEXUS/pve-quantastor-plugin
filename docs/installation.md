@@ -9,7 +9,7 @@ with `apt`, which also installs the packages it depends on (`open-iscsi`,
 `multipath-tools`):
 
 ```bash
-apt install ./pve-storage-quantastor_1.1.2-1_all.deb
+apt install ./pve-storage-quantastor_1.2.0-1_all.deb
 # PVE services are restarted automatically by postinst
 ```
 
@@ -39,12 +39,22 @@ stopped:
 pvesm set <storeid> --delete multipath
 ```
 
+**Do not downgrade below 1.2.0 while any storage uses `volume_prefix` or
+`transport fc`.** Releases before 1.2.0 do not know these options. They log
+`unable to parse value of 'volume_prefix'` (or `'transport'`), drop the option
+and keep the storage active, so a prefixed storage lists and creates volumes
+without its prefix (the situation described in
+[Sharing a storage pool between Proxmox clusters](limitations.md#sharing-a-storage-pool-between-proxmox-clusters)),
+and an FC storage tries to attach its volumes over iSCSI. The options cannot be
+removed from a storage either, because its volumes would no longer be found or
+attached. Keep every node in the cluster on 1.2.0 or later.
+
 ## Upgrading from the patch-based alpha
 
 The archived v0.1 alpha (GitHub tag `v0.1-alpha`) worked by patching Proxmox's own
 storage modules and registered its storage as a `zfs` entry with
 `iscsiprovider quantastor`. Version 1.0.0 replaced that integration entirely and
-1.1.1 is the same first-class plugin, so on any node running 1.0.0 or later:
+later releases are the same first-class plugin, so on any node running 1.0.0 or later:
 
 - **A leftover alpha storage entry is inert.** The Proxmox core patches it relied
   on do not survive a `pve-storage` upgrade, so the entry has no working provider
@@ -98,5 +108,5 @@ systemctl restart pvedaemon pveproxy pvestatd
 apt install debhelper
 
 bash build-deb.sh
-# Produces ../pve-storage-quantastor_1.1.2-1_all.deb
+# Produces ../pve-storage-quantastor_1.2.0-1_all.deb
 ```

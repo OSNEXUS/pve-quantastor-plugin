@@ -25,7 +25,7 @@ Validated container lifecycle (PVE 9.1/9.2, two-node cluster):
 | Snapshot of a running CT | Root fs (and mount points) are fsfreeze'd first, so snapshots are filesystem-consistent |
 | Snapshot delete / rollback | Rollback requires the CT stopped (PVE enforces this) |
 | Resize (`pct resize`) | Online and offline; LUN grows, then PVE runs `resize2fs` |
-| Template + clones | `pct template`, then linked or full clones; destroy clones before their template |
+| Template + clones | `pct template`, then linked or full clones (a linked clone is a full copy, so prefer `--full`, see [Linked clones are full copies](limitations.md#linked-clones-are-full-copies)); destroy clones before their template |
 | Migration between nodes | Restart mode only — containers on block storage cannot live-migrate (PVE-wide constraint, same as RBD/LVM-thin) |
 | `pct move-volume` | Both directions, to/from other storages; CT moves are file-level (rsync), not block copies |
 | Extra mount points | `pct set <ctid> -mp0 <storeid>:<size>,mp=/path` allocates a dedicated LUN per mount point |

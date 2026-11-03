@@ -4,7 +4,8 @@ How the plugin sits between Proxmox VE and the QuantaStor REST API.
 
 ## How it works
 
-QuantaStor manages storage volumes internally and exports them over iSCSI. The plugin sits between
+QuantaStor manages storage volumes internally and exports them over iSCSI (or Fibre Channel, see
+below). The plugin sits between
 Proxmox VE's storage layer and the QuantaStor REST API:
 
 ```
@@ -30,6 +31,12 @@ Proxmox VE storage layer (pvedaemon / pvestatd / qm / pct)
 ```
 
 The same diagram as an image: [`architecture.svg`](architecture.svg).
+
+With `transport fc`, `FCManager.pm` takes the place of `ISCSIManager.pm`: it rescans
+the node's FC HBAs instead of logging in, finds the LUN by its WWID, and always hands
+QEMU the multipath map. Both managers offer the same volume-level calls (attach,
+detach, device path, rescan), so the plugin hooks do not depend on the transport. See
+[Fibre Channel](fibre-channel.md).
 
 ## QuantaStor API
 

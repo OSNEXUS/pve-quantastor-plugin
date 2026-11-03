@@ -1,3 +1,56 @@
+pve-storage-quantastor (1.2.0-1) unstable; urgency=medium
+
+  * v1.2.0 — Fibre Channel, shared pools, robustness. Changes since 1.1.2:
+  * New 'transport' storage option: 'fc' attaches volumes over Fibre
+    Channel instead of iSCSI (fixed when the storage is added; iSCSI stays
+    the default). The node's HBA port names are registered on QuantaStor as
+    one host, each volume is found by its WWID after an HBA rescan, and
+    guests always use a multipath device, with the HA pair's standby paths
+    grouped by ALUA. Validated on one Proxmox node against a QuantaStor HA
+    pair; migration and other multi-node cases are not validated on FC yet
+    (see docs/limitations.md and docs/fibre-channel.md).
+  * New 'volume_prefix' storage option, fixed when the storage is added.
+    Each Proxmox cluster that uses a pool can give its storage its own
+    prefix, so several clusters (or several entries in one cluster) can
+    share one QuantaStor pool without seeing each other's volumes.
+  * activate_storage now refuses to activate when this node's iSCSI
+    initiator name (or FC port name) is already registered on QuantaStor
+    by the plugin for a different node. Nodes that share an initiator name
+    disrupt each other's storage access. After upgrading, such a node shows
+    the storage as inactive, and the error message gives the QuantaStor
+    command that fixes it.
+  * The plugin reports the node's own storage API version (13 to 16) and
+    implements get_identity, so Proxmox VE 9.2 no longer logs the "older
+    storage API" warning.
+  * Creating a linked clone could fail with "A storage volume with the
+    specified name ... already exists [err=9]" when the name was chosen from
+    a volume list that did not yet show a volume created moments earlier.
+    The plugin now moves on to the next disk number, as it already did for
+    new disks.
+  * Rolling back a snapshot taken before a resize left the disk at the
+    larger size, so the guest saw a disk bigger than its data and a later
+    backup failed with "err -61 - No data available". QuantaStor rebuilds
+    the LUN size during a rollback only while a host has access; the plugin
+    now grants this node access for the duration of the rollback.
+    Disks already affected: see docs/troubleshooting.md.
+  * Read-only API calls are retried up to 3 times on QuantaStor's transient
+    "TypeNotFound" error, which concurrent requests can trigger on the
+    appliance. Writes are never retried.
+  * The API client waits up to 120 s for a reply (was 30 s). Volume
+    listings on large grids, and access changes that wait for other
+    volumes' in-flight I/O, can take longer than 30 s; the plugin then
+    reported a failure (for example a disk left behind after deleting a
+    template) for work the appliance completed.
+  * Docs: README split into docs/; one storage entry per pool per cluster
+    unless each entry has its own prefix (two unprefixed entries can make
+    Proxmox delete a disk that is in use); the cloud-init limitation is
+    narrowed to a VM whose cloud-init volume is missing.
+  * Compatibility: Proxmox VE 9.1 and 9.2. QuantaStor 6.9 for iSCSI;
+    Fibre Channel validated against QuantaStor 7.0; QuantaStor 6.9
+    checked by comparison with 7.0 (same appliance code for FC).
+
+ -- OSNexus <support@osnexus.com>  Fri, 30 Oct 2026 21:16:19 +0000
+
 pve-storage-quantastor (1.1.2-1) unstable; urgency=medium
 
   * v1.1.2 — fix. Changes since 1.1.1:

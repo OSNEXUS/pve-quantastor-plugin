@@ -54,7 +54,10 @@ sub new {
         password   => $args{password},
         ssl_verify => $args{ssl_verify} // 0,
         ca_cert    => $args{ca_cert},
-        timeout    => $args{timeout}    // 30,
+        # QuantaStor finishes some calls after more than 30 s (a volume enum on
+        # a large grid, an ACL change waiting on SCST); a client that gives up
+        # first reports a failure for work the appliance then completes.
+        timeout    => $args{timeout}    // 120,
 
         # Optional logger: a coderef that accepts ($level, $message).
         # Defaults to a no-op so the module works without PVE's syslog.
@@ -127,10 +130,34 @@ sub _ua {
     return $ua;
 }
 
-# Execute a single QuantaStor API call.
+# Attempts for a read that fails with QuantaStor's transient TypeNotFound.
+my $TYPENOTFOUND_ATTEMPTS = 3;
+
+# Execute a QuantaStor API call.
 # Returns the decoded Perl data structure on success.
 # Dies with a descriptive message on HTTP or API-level failure.
+#
+# Appliances whose REST service shares one SOAP client across threads fail
+# concurrent calls now and then with TypeNotFound. Reads (*Get, *Enum) are
+# retried; writes are not, since a failed write may still have taken effect.
 sub _get {
+    my ($self, $method, %params) = @_;
+
+    my $read_only = $method =~ /(?:Get|Enum)$/;
+    for my $attempt (1 .. $TYPENOTFOUND_ATTEMPTS) {
+        my $data = eval { $self->_get_once($method, %params) };
+        my $err  = $@;
+        return $data unless $err;
+        die $err unless $read_only && $err =~ /TypeNotFound/
+            && $attempt < $TYPENOTFOUND_ATTEMPTS;
+        $self->{logger}->(warning => "APIClient: '$method' failed with QuantaStor's "
+            . "transient TypeNotFound (attempt $attempt/$TYPENOTFOUND_ATTEMPTS), retrying: $err");
+        $self->{_sleep}->(1);
+    }
+}
+
+# Execute a single QuantaStor API call, without retries.
+sub _get_once {
     my ($self, $method, %params) = @_;
 
     my $url = sprintf('https://%s:%d/qstorapi/%s',
@@ -621,19 +648,52 @@ sub ensure_host_registered {
     croak "ensure_host_registered: hostname is required" unless defined $hostname && length $hostname;
     croak "ensure_host_registered: iqn is required"      unless defined $iqn      && length $iqn;
 
+    # Additional initiator ports (FC hosts usually have two WWPNs) join the
+    # same host object so one ACL covers every path.
+    my @extra = @{ $opts{extra_initiators} // [] };
+    delete $opts{extra_initiators};
+
     my $host = $self->host_get($iqn);
+    my $host_id;
     if (defined $host) {
         $self->{logger}->(debug => "APIClient: host '$iqn' already registered (id=$host->{id})");
-        return $host->{id};
+        $host_id = $host->{id};
+    } else {
+        $self->{logger}->(info => "APIClient: registering new host '$hostname' ($iqn)");
+        my $result = $self->host_add($hostname, $iqn, %opts);
+
+        # hostAdd returns { obj => { id => ..., ... }, task => ... }
+        my $new_host = (ref $result eq 'HASH' && $result->{obj}) ? $result->{obj} : $result;
+        croak "host_add response missing 'id'" unless defined $new_host->{id};
+        $host_id = $new_host->{id};
     }
 
-    $self->{logger}->(info => "APIClient: registering new host '$hostname' ($iqn)");
-    my $result = $self->host_add($hostname, $iqn, %opts);
+    for my $init (@extra) {
+        # hostGet resolves any registered initiator, so a hit means it is
+        # already attached to some host; only add the ones QuantaStor lacks.
+        next if defined $self->host_get($init);
+        $self->{logger}->(info => "APIClient: adding initiator '$init' to host '$hostname'");
+        $self->host_initiator_add($host_id, $init);
+    }
 
-    # hostAdd returns { obj => { id => ..., ... }, task => ... }
-    my $new_host = (ref $result eq 'HASH' && $result->{obj}) ? $result->{obj} : $result;
-    croak "host_add response missing 'id'" unless defined $new_host->{id};
-    return $new_host->{id};
+    return $host_id;
+}
+
+=head2 host_initiator_add($host, $initiator)
+
+Adds an extra IQN or WWPN to an existing host entry (C<hostInitiatorAdd>).
+
+=cut
+
+sub host_initiator_add {
+    my ($self, $host, $initiator) = @_;
+    croak "host_initiator_add: host is required"      unless defined $host      && length $host;
+    croak "host_initiator_add: initiator is required" unless defined $initiator && length $initiator;
+
+    return $self->_get('hostInitiatorAdd',
+        host => $host,
+        iqn  => $initiator,
+    );
 }
 
 1;

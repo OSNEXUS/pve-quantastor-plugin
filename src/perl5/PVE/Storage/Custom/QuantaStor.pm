@@ -9,6 +9,7 @@ use base qw(PVE::Storage::Plugin);
 
 use PVE::Storage::QuantaStor::APIClient;
 use PVE::Storage::QuantaStor::ISCSIManager;
+use PVE::Storage::QuantaStor::FCManager;
 
 # Bind syslog once at load. PVE::SafeSyslog is present on every PVE host,
 # but absent in the unit-test environment; falling back to a no-op keeps
@@ -18,7 +19,7 @@ if (eval { require PVE::SafeSyslog; 1 }) {
     $_syslog_fn = \&PVE::SafeSyslog::syslog;
 }
 
-our $VERSION = '1.1.2';
+our $VERSION = '1.2.0';
 
 =head1 NAME
 
@@ -28,7 +29,8 @@ PVE::Storage::Custom::QuantaStor - Proxmox VE storage plugin for QuantaStor appl
 
 Registers the storage type C<quantastor> with Proxmox VE via the custom plugin
 interface.  All volume management is performed via the QuantaStor REST API;
-iSCSI login/logout is handled via L<PVE::Storage::QuantaStor::ISCSIManager>.
+iSCSI login/logout is handled via L<PVE::Storage::QuantaStor::ISCSIManager>,
+Fibre Channel attach/detach via L<PVE::Storage::QuantaStor::FCManager>.
 
 No PVE core files are modified by this plugin.  Install via the Debian package
 or copy this file to C</usr/share/perl5/PVE/Storage/Custom/> and restart
@@ -44,17 +46,21 @@ pvedaemon.
 
 Returns the PVE storage API version this plugin implements.
 
-Declared at 13 deliberately. PVE 9.1 has APIVER=13 (hard-blocks anything
-higher); PVE 9.2 has APIVER=14 with APIAGE=5, so 13 still loads — it just
-warns "implementing an older storage API" once at plugin load. None of
-the hooks we override changed between 13 and 14, so claiming 14 would
-silence the warning at the cost of breaking every 9.1.x host outright.
-Only bump if a new PVE version drops APIAGE such that 13 falls below
-APIVER-APIAGE, or if we adopt a 14+ only hook.
+Reports the node's own storage API version (C<PVE::Storage::APIVER>, which
+PVE defines before it calls C<api()>), clamped to 13..C<$MAX_API>. A PVE 9.1
+node (13) and a PVE 9.2 node (16) both load the plugin without the "older
+storage API" warning, and one package serves both. A node newer than
+C<$MAX_API> still loads it, with that warning, until the newer API versions
+are reviewed and C<$MAX_API> is raised.
 
 =cut
 
-sub api { return 13 }
+my $MAX_API = 16;   # highest storage API reviewed and tested against
+
+sub api {
+    my $node = eval { PVE::Storage::APIVER() } // 13;
+    return $node < 13 ? 13 : $node > $MAX_API ? $MAX_API : $node;
+}
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -221,6 +227,26 @@ sub properties {
             type        => 'boolean',
             default     => 0,
         },
+        volume_prefix => {
+            description => 'Prefix for this storage\'s QuantaStor volume names, so '
+                . 'several Proxmox clusters can share one pool (e.g. clusterA-).',
+            type        => 'string',
+            # QuantaStor names: alphanumeric first, then [A-Za-z0-9_.-], 128 max
+            # (32 leaves room for the volume and snapshot suffix). Refused, so no
+            # storage on the pool can list or collide with another's volumes: a
+            # prefix starting like a PVE volume name, or containing 'vm-<n>-' etc.
+            # (a shorter prefix would list it), or ending in 'template-' (its
+            # names would match another storage's template snapshots).
+            pattern     => '(?!(?:base|basevol|vm|subvol)-\d)(?!.*(?:base|basevol|vm|subvol)-\d+-)'
+                . '(?!.*template-$)[A-Za-z0-9][A-Za-z0-9_.\-]*',
+            maxLength   => 32,
+        },
+        transport => {
+            description => "Host attach transport: 'iscsi' (default) or 'fc' "
+                         . "(Fibre Channel)",
+            type        => 'string',
+            enum        => ['iscsi', 'fc'],
+        },
     };
 }
 
@@ -247,6 +273,9 @@ sub options {
         bwlimit    => { optional => 1 },
         shared     => { optional => 1 },   # see on_add_hook for default behavior
         multipath  => { optional => 1 },
+        # Changing it would orphan every existing volume.
+        volume_prefix => { optional => 1, fixed => 1 },
+        transport  => { optional => 1, fixed => 1 },
     };
 }
 
@@ -338,6 +367,24 @@ sub _iscsi {
     );
 }
 
+# Build an FCManager from the storage config hash.
+sub _fc {
+    my ($scfg, $storeid) = @_;
+    return PVE::Storage::QuantaStor::FCManager->new(
+        logger => _logger($storeid),
+    );
+}
+
+sub _is_fc { my ($scfg) = @_; return ($scfg->{transport} // 'iscsi') eq 'fc' }
+
+# The transport that attaches volumes to this host. Both managers implement
+# the same volume-keyed contract (see ISCSIManager "TRANSPORT CONTRACT"); the
+# iSCSI multipath option stays in _login/_logout/path/volume_resize.
+sub _transport {
+    my ($scfg, $storeid) = @_;
+    return _is_fc($scfg) ? _fc($scfg, $storeid) : _iscsi($scfg, $storeid);
+}
+
 # SCSI WWID of a volume: QuantaStor exposes NAA 6 "62000000" + deviceDescriptor
 # on every path, so the multipath device can be named without a session.
 sub _wwid {
@@ -352,28 +399,43 @@ sub _wwid {
 # Log in to a volume's target: every portal plus its dm map when multipath
 # is on, else the single configured portal (caller waits for the device).
 sub _login {
-    my ($scfg, $iscsi, $vol) = @_;
-    return $iscsi->login($vol->{iqn}) unless $scfg->{multipath};
+    my ($scfg, $t, $vol) = @_;
+    # FC has no login: the LUN shows up on a SCSI rescan once the ACL is in.
+    # Always multipathed: an HA pair's standby (ALUA) paths fail I/O, so the
+    # single-path by-id link can land on a path that cannot be used.
+    if (_is_fc($scfg)) {
+        $t->attach($vol);
+        my $wwid = $t->wwid($vol);
+        die "QuantaStor: FC multipath map for '$vol->{name}' ($wwid) did not appear "
+          . "after 30s — " . $t->missing_device_hint() . "\n"
+            unless $t->add_map($wwid);
+        return 1;
+    }
+    return $t->login($vol->{iqn}) unless $scfg->{multipath};
 
-    $iscsi->login_all($vol->{iqn});
+    $t->login_all($vol->{iqn});
     my $wwid = _wwid($vol);
     die "QuantaStor: multipath map for '$vol->{name}' ($wwid) did not appear "
       . "after 30s — check multipathd and /etc/multipath.conf\n"
-        unless $iscsi->add_map($wwid);
+        unless $t->add_map($wwid);
     return 1;
 }
 
 # Log out of a volume's target and wait for the sessions to go. The dm map is
 # flushed first: a map left without paths queues I/O and can hang.
 sub _logout {
-    my ($scfg, $iscsi, $vol) = @_;
-    if ($scfg->{multipath}) {
-        $iscsi->flush_map(_wwid($vol)) if defined $vol->{deviceDescriptor};
-        $iscsi->logout_all($vol->{iqn});
-    } else {
-        $iscsi->logout($vol->{iqn});
+    my ($scfg, $t, $vol) = @_;
+    if (_is_fc($scfg)) {
+        $t->detach($vol);
+        return $t->wait_for_detached($vol);
     }
-    return $iscsi->wait_for_logout($vol->{iqn});
+    if ($scfg->{multipath}) {
+        $t->flush_map(_wwid($vol)) if defined $vol->{deviceDescriptor};
+        $t->logout_all($vol->{iqn});
+    } else {
+        $t->logout($vol->{iqn});
+    }
+    return $t->wait_for_logout($vol->{iqn});
 }
 
 # Strip the 'qs-' prefix QuantaStor prepends to pool UUIDs in some contexts.
@@ -389,10 +451,16 @@ sub _snap_vol_name {
     return "${vol_name}${SNAP_SEP}${snap}";
 }
 
-# Extract the bare volume name from a PVE volname (strips any base prefix).
-sub _bare_name {
-    my ($class, $volname) = @_;
-    return ($class->parse_volname($volname))[1];
+# The storage's volume_prefix ('' when unset); prepended to every QuantaStor name.
+sub _prefix {
+    my ($scfg) = @_;
+    return $scfg->{volume_prefix} // '';
+}
+
+# QuantaStor volume name of a PVE volname (strips any base prefix, adds volume_prefix).
+sub _qs_name {
+    my ($class, $scfg, $volname) = @_;
+    return _prefix($scfg) . ($class->parse_volname($volname))[1];
 }
 
 # ---------------------------------------------------------------------------
@@ -445,7 +513,8 @@ sub list_images {
     my $pool_uuid = $client->pool_get(_raw_pool_id($scfg->{pool_id}))->{id};
     my $all_vols  = $client->volume_enum();
 
-    my $res = [];
+    my $res    = [];
+    my $prefix = _prefix($scfg);
 
     for my $vol (@$all_vols) {
         # Only include volumes belonging to our pool.
@@ -457,6 +526,10 @@ sub list_images {
         # Skip snapshots — they appear as separate volumes in QuantaStor but
         # PVE manages them through the snapshot hooks, not list_images.
         next if $vol->{isSnapshot} && $vol->{isSnapshot} eq '1';
+
+        # Another cluster's volumes on a shared pool carry a different prefix.
+        next unless substr($name, 0, length $prefix) eq $prefix;
+        $name = substr($name, length $prefix);
 
         # Only handle names that follow the PVE naming convention.
         next unless $name =~ m/^(base|basevol|vm|subvol)-(\d+)-/;
@@ -503,7 +576,8 @@ With C<$snapname>, it is the path of that snapshot's own LUN.
 sub path {
     my ($class, $scfg, $volname, $storeid, $snapname) = @_;
 
-    my ($vtype, $name, $vmid) = $class->parse_volname($volname);
+    my ($vtype, undef, $vmid) = $class->parse_volname($volname);
+    my $name = _qs_name($class, $scfg, $volname);
     $name = _snap_vol_name($name, $snapname) if defined $snapname;
 
     # PVE's delete API handler calls path() BEFORE vdisk_free to look up
@@ -514,24 +588,26 @@ sub path {
     my $vol = _client($scfg, $storeid)->volume_get_or_undef($name);
     return (undef, $vmid, $vtype) unless $vol;
 
-    # A volume can exist without an iSCSI target (e.g. export not yet
-    # provisioned). Return undef path rather than letting device_path croak
-    # with a cryptic "target_iqn is required" — same contract as a missing vol.
-    return (undef, $vmid, $vtype) unless defined $vol->{iqn} && length $vol->{iqn};
+    # A volume can exist without a target identity yet (e.g. export not yet
+    # provisioned). Return undef path rather than letting the transport croak
+    # with a cryptic error — same contract as a missing vol.
+    my $t = _transport($scfg, $storeid);
+    return (undef, $vmid, $vtype) unless $t->is_exported($vol);
+
+    # FC resolves the LUN by its WWID (the dm map when multipathd has one).
+    return ($t->volume_device_path($vol), $vmid, $vtype) if _is_fc($scfg);
 
     # Same contract for multipath: no descriptor means no derivable device.
     return (undef, $vmid, $vtype)
         if $scfg->{multipath} && !defined $vol->{deviceDescriptor};
-
-    my $iscsi = _iscsi($scfg, $storeid);
 
     # QuantaStor presents each volume as a dedicated iSCSI target at LUN 0
     # on the wire. The 'lun' field in volume_get is an internal QuantaStor
     # concept (position within a host group) and does not match the actual
     # iSCSI LUN number seen by the initiator. With multipath, the dm device.
     my $path = $scfg->{multipath}
-        ? $iscsi->map_path(_wwid($vol))
-        : $iscsi->device_path($vol->{iqn}, 0);
+        ? $t->map_path(_wwid($vol))
+        : $t->device_path($vol->{iqn}, 0);
 
     return ($path, $vmid, $vtype);
 }
@@ -546,7 +622,7 @@ C<($size, $format, $used, $parent)> in list context.
 sub volume_size_info {
     my ($class, $scfg, $storeid, $volname, $timeout) = @_;
 
-    my $name = _bare_name($class, $volname);
+    my $name = _qs_name($class, $scfg, $volname);
     my $vol  = _client($scfg, $storeid)->volume_get($name);
 
     my $size = $vol->{size} // 0;
@@ -562,26 +638,52 @@ sub volume_size_info {
 Verifies API connectivity and ensures this PVE node is registered as an
 initiator host in QuantaStor.  Called once per storage mount.
 
+Dies if this node's initiator name is already registered under another
+node's C<-pve> host name; the message gives the C<qs> command that fixes it.
+
 =cut
 
 sub activate_storage {
     my ($class, $storeid, $scfg, $cache) = @_;
 
     my $client = _client($scfg, $storeid);
-    my $iscsi  = _iscsi($scfg, $storeid);
+    my $t      = _transport($scfg, $storeid);
 
     # Verify connectivity — will die on network/auth failure.
     $client->pool_get(_raw_pool_id($scfg->{pool_id}));
 
-    die "QuantaStor storage '$storeid': multipath is enabled but multipath-tools "
+    die "QuantaStor storage '$storeid': multipath (or FC) is enabled but multipath-tools "
       . "is not installed on this node (apt install multipath-tools)\n"
-        if $scfg->{multipath} && !grep { -x "$_/multipathd" } qw(/usr/sbin /sbin);
+        if ($scfg->{multipath} || _is_fc($scfg)) && !grep { -x "$_/multipathd" } qw(/usr/sbin /sbin);
 
-    # Register this node as a QuantaStor host if it isn't already.
-    my $iqn      = $iscsi->get_initiator_iqn();
+    # Register this node as a QuantaStor host if it isn't already. An FC host
+    # contributes every HBA port WWPN so a single ACL covers all paths.
+    my ($iqn, @extra) = $t->initiator_ids();
+    my $what     = _is_fc($scfg) ? 'FC port name (WWPN)' : 'iSCSI initiator name';
     my $hostname = hostname() . '-pve';
+    my $host     = $client->host_get($iqn);
+
+    # Another node's plugin registered this IQN: sharing one host entry breaks
+    # both nodes' sessions. Admin-named hosts (no '-pve' suffix) are left alone.
+    if ($host && ($host->{name} // '') =~ /-pve$/ && $host->{name} ne $hostname) {
+        my $msg = "QuantaStor storage '$storeid': this node's $what $iqn is "
+          . "already registered on QuantaStor as host '$host->{name}', not '$hostname'. "
+          . "Nodes that share an initiator name disrupt each other's storage access; see "
+          . "'Storage only works on one cluster at a time' in the troubleshooting guide. ";
+        # Several initiators: a node with the same hostname shares it; renaming would take it from that node.
+        $msg .= @{ $host->{initiatorPortList} // [] } > 1
+          ? "That host also has other initiators, so another node with this node's old "
+            . "hostname uses it. Remove this node's initiator name from it: "
+            . "qs host-initiator-remove --host=$host->{name} --iqn=$iqn\n"
+          : "If this node was renamed, rename the host on QuantaStor: "
+            . "qs host-modify --host=$host->{name} --hostname=$hostname\n";
+        die $msg;
+    }
+
     $client->ensure_host_registered($hostname, $iqn,
-        description => 'Registered by Proxmox VE QuantaStor plugin');
+        description      => 'Registered by Proxmox VE QuantaStor plugin',
+        extra_initiators => \@extra)
+        unless $host && !@extra;
 
     return 1;
 }
@@ -601,6 +703,42 @@ sub deactivate_storage {
 # Volume activation (iSCSI login/logout)
 # ---------------------------------------------------------------------------
 
+# This node's identity for QuantaStor ACL calls. They resolve a host by IQN,
+# name or ID but not by WWPN, so FC passes the ID of the host holding the WWPN.
+sub _acl_initiator {
+    my ($client, $scfg, $t) = @_;
+    my $id = $t->initiator_id();
+    return $id unless _is_fc($scfg);
+    my $host = $client->host_get($id);
+    die "QuantaStor: this node's FC port $id is not registered on QuantaStor "
+      . "(activate the storage first)\n" unless $host;
+    return $host->{id};
+}
+
+# Grant $iqn access to a volume.
+#
+# QuantaStor can return a freshly cloned volume before SCST has created its
+# iSCSI target (clone is served by an async ZFS "instant replica"), and the
+# ACL add then fails with a transient 5xx — observed as
+# "HTTP 500 interrupted by signal" — killing an otherwise-healthy clone.
+# Retrying is safe because an ACL add for a host that already has access is
+# a no-op. Anything that is not a 5xx (auth, not-found) is a real error and
+# must still fail immediately rather than stalling for the whole budget.
+sub _acl_add {
+    my ($client, $storeid, $vol_id, $iqn, $what) = @_;
+    my $acl_err;
+    for my $attempt (1 .. $ACL_ADD_ATTEMPTS) {
+        eval { $client->volume_acl_add($vol_id, $iqn) };
+        return 1 unless $@;
+        $acl_err = $@;
+        die $acl_err unless $acl_err =~ /HTTP 5\d\d/;
+        _logger($storeid)->(warning =>
+            "$what failed (attempt $attempt/$ACL_ADD_ATTEMPTS), retrying: $acl_err");
+        sleep $ACL_ADD_RETRY_SECS if $attempt < $ACL_ADD_ATTEMPTS;
+    }
+    die $acl_err;
+}
+
 =head2 activate_volume($storeid, $scfg, $volname, $snapname, $cache)
 
 Grants this node access to the volume via ACL and logs in to the iSCSI target.
@@ -613,52 +751,35 @@ sub activate_volume {
     my ($class, $storeid, $scfg, $volname, $snapname, $cache) = @_;
 
     # A QuantaStor snapshot is a volume with its own iSCSI target.
-    my $name   = _bare_name($class, $volname);
+    my $name   = _qs_name($class, $scfg, $volname);
     $name      = _snap_vol_name($name, $snapname) if defined $snapname;
     my $client = _client($scfg, $storeid);
-    my $iscsi  = _iscsi($scfg, $storeid);
+    my $t      = _transport($scfg, $storeid);
 
     my $vol = $client->volume_get($name);
-    my $iqn = $iscsi->get_initiator_iqn();
 
-    die "QuantaStor activate_volume: volume '$name' has no iSCSI target "
-      . "(iqn) — the LUN may not be exported yet on the appliance\n"
-        unless defined $vol->{iqn} && length $vol->{iqn};
+    die "QuantaStor activate_volume: volume '$name' has no "
+      . (_is_fc($scfg) ? 'SCSI device identifier' : 'iSCSI target (iqn)')
+      . " — the LUN may not be exported yet on the appliance\n"
+        unless $t->is_exported($vol);
+
+    my $iqn = _acl_initiator($client, $scfg, $t);
 
     # Grant access then login — order matters.
-    #
-    # QuantaStor can return a freshly cloned volume before SCST has created its
-    # iSCSI target (clone is served by an async ZFS "instant replica"), and the
-    # ACL add then fails with a transient 5xx — observed as
-    # "HTTP 500 interrupted by signal" — killing an otherwise-healthy clone.
-    # Retrying is safe because an ACL add for a host that already has access is
-    # a no-op. Anything that is not a 5xx (auth, not-found) is a real error and
-    # must still fail immediately rather than stalling for the whole budget.
-    my $acl_added = 0;
-    my $acl_err;
-    for my $attempt (1 .. $ACL_ADD_ATTEMPTS) {
-        eval { $client->volume_acl_add($vol->{id}, $iqn) };
-        if (!$@) { $acl_added = 1; last }
-        $acl_err = $@;
-        die $acl_err unless $acl_err =~ /HTTP 5\d\d/;
-        _logger($storeid)->(warning =>
-            "activate_volume: ACL add for '$name' failed (attempt $attempt/"
-          . "$ACL_ADD_ATTEMPTS), retrying: $acl_err");
-        sleep $ACL_ADD_RETRY_SECS if $attempt < $ACL_ADD_ATTEMPTS;
-    }
-    die $acl_err unless $acl_added;
+    _acl_add($client, $storeid, $vol->{id}, $iqn, "activate_volume: ACL add for '$name'");
 
     # With multipath, _login already waited for the dm map.
-    _login($scfg, $iscsi, $vol);
-    return 1 if $scfg->{multipath};
+    _login($scfg, $t, $vol);
+    return 1 if $scfg->{multipath} && !_is_fc($scfg);
 
-    # Wait for the by-path symlink before returning. PVE expects activate_volume
+    # Wait for the device link before returning. PVE expects activate_volume
     # to leave the device usable; if we return before udev creates the symlink,
     # QEMU fails to open the disk with a confusing low-level error.
-    unless ($iscsi->wait_for_device($vol->{iqn}, 0)) {
-        my $dev = $iscsi->device_path($vol->{iqn}, 0);
-        die "QuantaStor activate_volume: iSCSI device '$dev' did not appear "
-          . "after 30s — check that iscsid is running and the LUN is exported\n";
+    unless ($t->wait_for_attached($vol)) {
+        my $dev   = $t->volume_device_path($vol);
+        my $label = _is_fc($scfg) ? 'FC' : 'iSCSI';
+        die "QuantaStor activate_volume: $label device '$dev' did not appear "
+          . "after 30s — " . $t->missing_device_hint() . "\n";
     }
 
     return 1;
@@ -673,21 +794,21 @@ Logs out of the iSCSI target and revokes ACL access for this node.
 sub deactivate_volume {
     my ($class, $storeid, $scfg, $volname, $snapname, $cache) = @_;
 
-    my $name   = _bare_name($class, $volname);
+    my $name   = _qs_name($class, $scfg, $volname);
     $name      = _snap_vol_name($name, $snapname) if defined $snapname;
     my $client = _client($scfg, $storeid);
-    my $iscsi  = _iscsi($scfg, $storeid);
+    my $t      = _transport($scfg, $storeid);
 
     # Use get_or_undef: a concurrent free_image on another cluster node may have
     # already deleted the volume by the time deactivate runs on this node.
     my $vol = $client->volume_get_or_undef($name);
     return 1 unless $vol;
 
-    my $iqn  = $iscsi->get_initiator_iqn();
+    my $iqn  = $t->initiator_id();
     my $host = $client->host_get($iqn);
 
     # Logout first, then remove ACL — reverse of activate_volume.
-    _logout($scfg, $iscsi, $vol);
+    _logout($scfg, $t, $vol);
 
     $client->volume_acl_remove($vol->{id}, $host->{id}) if $host;
 
@@ -728,7 +849,8 @@ sub alloc_image {
     # QuantaStor refuses it with err=9; move on to the next disk number.
     for my $attempt (1 .. $ALLOC_NAME_ATTEMPTS) {
         # Default to thin; 'sparse 0' in storage.cfg opts into thick (100% reserved).
-        eval { $client->volume_create($name, $size, $pool_raw, thin => $scfg->{sparse} // 1) };
+        eval { $client->volume_create(_prefix($scfg) . $name, $size, $pool_raw,
+            thin => $scfg->{sparse} // 1) };
         return $name unless $@;
         die $@ unless $auto && $@ =~ /err=9\b/ && $attempt < $ALLOC_NAME_ATTEMPTS;
         _logger($storeid)->(warning =>
@@ -746,9 +868,9 @@ Deactivates and permanently deletes a volume (and all its snapshots).
 sub free_image {
     my ($class, $storeid, $scfg, $volname, $isBase) = @_;
 
-    my $name   = _bare_name($class, $volname);
+    my $name   = _qs_name($class, $scfg, $volname);
     my $client = _client($scfg, $storeid);
-    my $iscsi  = _iscsi($scfg, $storeid);
+    my $t      = _transport($scfg, $storeid);
 
     # Idempotent: if the volume is already gone on QuantaStor, treat as success.
     # PVE retries deletes on some failure paths; raising "not found" would
@@ -760,10 +882,10 @@ sub free_image {
     # removed, or whose iSCSI session is stale should still be deletable —
     # don't let teardown errors mask the real goal.
     eval {
-        my $iqn  = $iscsi->get_initiator_iqn();
+        my $iqn  = $t->initiator_id();
         my $host = $client->host_get($iqn);
 
-        _logout($scfg, $iscsi, $vol);
+        _logout($scfg, $t, $vol);
         $client->volume_acl_remove($vol->{id}, $host->{id}) if $host;
     };
     warn "free_image teardown warning for '$volname': $@" if $@;
@@ -797,16 +919,20 @@ sub free_image {
     return undef;
 }
 
-=head2 volume_resize($scfg, $storeid, $volname, $size, $running)
+=head2 volume_resize($scfg, $storeid, $volname, $size, $running, $snapname)
 
 Grows a volume to C<$size> bytes.  Shrinking is not supported by QuantaStor.
+Dies if C<$snapname> is set: resizing a snapshot is not supported.
 
 =cut
 
 sub volume_resize {
-    my ($class, $scfg, $storeid, $volname, $size, $running) = @_;
+    my ($class, $scfg, $storeid, $volname, $size, $running, $snapname) = @_;
 
-    my $name   = _bare_name($class, $volname);
+    # Storage API 15: only snapshot-as-volume-chain storages resize a snapshot.
+    die "resizing a snapshot is not supported on QuantaStor storage\n" if defined $snapname;
+
+    my $name   = _qs_name($class, $scfg, $volname);
     my $client = _client($scfg, $storeid);
 
     my $vol      = $client->volume_get($name);
@@ -825,13 +951,18 @@ sub volume_resize {
     # geometry; QEMU's next block_resize QMP (running) or fresh VM start
     # (stopped) would then see the stale size. rescan is a no-op when no
     # session is active.
-    my $iscsi = _iscsi($scfg, $storeid);
-    if ($scfg->{multipath}) {
-        # Every path must see the new size before the map can grow.
-        $iscsi->resize_map(_wwid($vol)) if $iscsi->rescan_all($vol->{iqn});
+    my $t = _transport($scfg, $storeid);
+    if (_is_fc($scfg)) {
+        warn "volume_resize: rescan failed for '$name' — kernel LUN geometry may be stale\n"
+            unless $t->rescan_volume($vol);
         return $size;
     }
-    unless ($iscsi->rescan($vol->{iqn})) {
+    if ($scfg->{multipath}) {
+        # Every path must see the new size before the map can grow.
+        $t->resize_map(_wwid($vol)) if $t->rescan_all($vol->{iqn});
+        return $size;
+    }
+    unless ($t->rescan($vol->{iqn})) {
         warn "volume_resize: rescan failed for '$name' — "
            . "kernel LUN geometry may be stale; QEMU block_resize may fail\n";
     }
@@ -853,7 +984,7 @@ The QuantaStor snapshot volume is named C<${volname}_${snap}>.
 sub volume_snapshot {
     my ($class, $scfg, $storeid, $volname, $snap) = @_;
 
-    my $name      = _bare_name($class, $volname);
+    my $name      = _qs_name($class, $scfg, $volname);
     my $snap_name = _snap_vol_name($name, $snap);
 
     _client($scfg, $storeid)->volume_snapshot($name, $snap_name);
@@ -870,7 +1001,7 @@ Deletes the QuantaStor snapshot volume for C<$snap>.
 sub volume_snapshot_delete {
     my ($class, $scfg, $storeid, $volname, $snap, $running) = @_;
 
-    my $name      = _bare_name($class, $volname);
+    my $name      = _qs_name($class, $scfg, $volname);
     my $snap_name = _snap_vol_name($name, $snap);
 
     my $client = _client($scfg, $storeid);
@@ -880,8 +1011,8 @@ sub volume_snapshot_delete {
 
     # vzdump never deactivates the snapshot it mounted; drop our session first.
     $class->deactivate_volume($storeid, $scfg, $volname, $snap)
-        if defined $snap_vol->{iqn}
-        && _iscsi($scfg, $storeid)->is_logged_in($snap_vol->{iqn});
+        if _transport($scfg, $storeid)->is_exported($snap_vol)
+        && _transport($scfg, $storeid)->is_attached($snap_vol);
 
     # Force-delete: PVE expects volume_snapshot_delete to remove the snapshot
     # even if QuantaStor considers it busy.
@@ -920,7 +1051,7 @@ Dies if the rollback is blocked; pushes blocker names onto C<$blockers> if provi
 sub volume_rollback_is_possible {
     my ($class, $scfg, $storeid, $volname, $snap, $blockers) = @_;
 
-    my $name       = _bare_name($class, $volname);
+    my $name       = _qs_name($class, $scfg, $volname);
     my $snap_name  = _snap_vol_name($name, $snap);
     my $client     = _client($scfg, $storeid);
 
@@ -955,17 +1086,18 @@ sub volume_rollback_is_possible {
 
 =head2 volume_snapshot_rollback($scfg, $storeid, $volname, $snap)
 
-Rolls C<$volname> back to C<$snap>: logout → rollback → login.
+Rolls C<$volname> back to C<$snap>: logout → grant this node access → rollback
+→ remove that access (no login; PVE activates the volume on the next start).
 
 =cut
 
 sub volume_snapshot_rollback {
     my ($class, $scfg, $storeid, $volname, $snap) = @_;
 
-    my $name      = _bare_name($class, $volname);
+    my $name      = _qs_name($class, $scfg, $volname);
     my $snap_name = _snap_vol_name($name, $snap);
     my $client    = _client($scfg, $storeid);
-    my $iscsi     = _iscsi($scfg, $storeid);
+    my $t         = _transport($scfg, $storeid);
 
     my $vol = $client->volume_get($name);
 
@@ -973,7 +1105,7 @@ sub volume_snapshot_rollback {
     # session may still be lingering (kernel session outlives the QEMU process).
     # Log out so QuantaStor will accept the rollback on an otherwise-idle target.
     # Do NOT re-login here — PVE calls activate_volume when the VM next starts.
-    _logout($scfg, $iscsi, $vol) if $iscsi->is_logged_in($vol->{iqn});
+    _logout($scfg, $t, $vol) if $t->is_attached($vol);
 
     # PVE-side logout returns before QuantaStor's server-side session tracker
     # GCs the connection. Volume rollback rejects on an active QS session, so
@@ -986,7 +1118,22 @@ sub volume_snapshot_rollback {
           . "stopped on all nodes and retry.\n";
     }
 
-    $client->volume_rollback($vol->{id}, $snap_name);
+    # QuantaStor rebuilds the target (and so its LUN size) on rollback only
+    # while a host is assigned; PVE's deactivate on stop removed ours. Without
+    # it, a rollback past a resize leaves the LUN at the larger size. Assign
+    # this node for the rollback only (no login); activate_volume re-adds it.
+    my $iqn = _acl_initiator($client, $scfg, $t);
+    _acl_add($client, $storeid, $vol->{id}, $iqn,
+        "volume_snapshot_rollback: ACL add for '$name'");
+    eval { $client->volume_rollback($vol->{id}, $snap_name) };
+    my $err = $@;
+
+    eval {
+        my $host = $client->host_get($iqn);
+        $client->volume_acl_remove($vol->{id}, $host->{id}) if $host;
+    };
+    warn "volume_snapshot_rollback: could not remove the ACL added for '$name': $@" if $@;
+    die $err if $err;
 
     return undef;
 }
@@ -1011,23 +1158,26 @@ Returns the new base volname.
 sub create_base {
     my ($class, $storeid, $scfg, $volname) = @_;
 
-    my ($vtype, $name, $vmid, $basename, $basevmid, $isBase) =
+    my ($vtype, $pve_name, $vmid, $basename, $basevmid, $isBase) =
         $class->parse_volname($volname);
 
     die "create_base not possible with an existing base image\n" if $isBase;
 
-    my $newname = $name;
-    $newname =~ s/^vm-/base-/;
+    (my $pve_newname = $pve_name) =~ s/^vm-/base-/;
+
+    # QuantaStor names; the volname returned to PVE stays unprefixed.
+    my $name    = _prefix($scfg) . $pve_name;
+    my $newname = _prefix($scfg) . $pve_newname;
 
     my $client = _client($scfg, $storeid);
-    my $iscsi  = _iscsi($scfg, $storeid);
-    my $iqn    = $iscsi->get_initiator_iqn();
+    my $t      = _transport($scfg, $storeid);
+    my $iqn    = _acl_initiator($client, $scfg, $t);
 
     my $vol  = $client->volume_get($name);
     my $host = $client->host_get($iqn);
 
     # Take offline.
-    _logout($scfg, $iscsi, $vol);
+    _logout($scfg, $t, $vol);
     $client->volume_acl_remove($vol->{id}, $host->{id}) if $host;
 
     # Wait for QuantaStor to GC its server-side view of the session before
@@ -1053,14 +1203,14 @@ sub create_base {
 
     # Re-grant access and bring online.
     $client->volume_acl_add($vol->{id}, $iqn);
-    _login($scfg, $iscsi, $new_vol);
+    _login($scfg, $t, $new_vol);
 
     # Create the template snapshot that clone_image will clone from.
-    my $template_snap = "template-$newname";
+    my $template_snap = _prefix($scfg) . "template-$pve_newname";
     $client->volume_snapshot($newname, $template_snap,
         description => 'Template snapshot created by Proxmox VE');
 
-    my $newvolname = $basename ? "$basename/$newname" : $newname;
+    my $newvolname = $basename ? "$basename/$pve_newname" : $pve_newname;
     return $newvolname;
 }
 
@@ -1079,22 +1229,31 @@ sub clone_image {
     die "clone_image only works on base images\n" unless $isBase;
 
     my $client      = _client($scfg, $storeid);
-    my $iscsi       = _iscsi($scfg, $storeid);
-    my $iqn         = $iscsi->get_initiator_iqn();
-    my $template_snap = "template-$name";
+    my $t           = _transport($scfg, $storeid);
+    my $iqn         = _acl_initiator($client, $scfg, $t);
+    my $template_snap = _prefix($scfg) . "template-$name";
     my $newname     = $class->find_free_diskname($storeid, $scfg, $vmid, 'raw');
 
-    my $result = $client->volume_clone($template_snap, $newname,
-        description => "Cloned from $name by Proxmox VE (vmid $vmid)");
+    # Same race as alloc_image: the auto-picked name may already exist (err=9).
+    my $result;
+    for my $attempt (1 .. $ALLOC_NAME_ATTEMPTS) {
+        $result = eval { $client->volume_clone($template_snap, _prefix($scfg) . $newname,
+            description => "Cloned from $name by Proxmox VE (vmid $vmid)") };
+        last unless $@;
+        die $@ unless $@ =~ /err=9\b/ && $attempt < $ALLOC_NAME_ATTEMPTS;
+        _logger($storeid)->(warning =>
+            "clone_image: '$newname' already exists on QuantaStor, trying the next disk number");
+        $newname =~ s/(\d+)$/$1 + 1/e;
+    }
 
     # The clone API returns { obj => { id => ..., iqn => ... } } on success.
     my $new_vol = (ref $result eq 'HASH' && $result->{obj}) ? $result->{obj} : $result;
 
-    # Grant access and login to the new clone. Multipath needs the clone's
-    # deviceDescriptor, which the clone response may not carry.
+    # Grant access and login to the new clone. Multipath and FC need the
+    # clone's deviceDescriptor, which the clone response may not carry.
     $client->volume_acl_add($new_vol->{id}, $iqn);
-    $new_vol = $client->volume_get($newname) if $scfg->{multipath};
-    _login($scfg, $iscsi, $new_vol);
+    $new_vol = $client->volume_get(_prefix($scfg) . $newname) if $scfg->{multipath} || _is_fc($scfg);
+    _login($scfg, $t, $new_vol);
 
     return $newname;
 }
@@ -1130,6 +1289,19 @@ sub volume_has_feature {
 
     return 1 if $features->{$feature}{$key};
     return undef;
+}
+
+=head2 get_identity($scfg, $storeid)
+
+Returns the QuantaStor storage pool UUID, so every storage entry on the same
+pool (from any Proxmox cluster) reports the same identity. It survives HA
+pool failover. Dies if the appliance cannot be reached.
+
+=cut
+
+sub get_identity {
+    my ($class, $scfg, $storeid) = @_;
+    return _client($scfg, $storeid)->pool_get(_raw_pool_id($scfg->{pool_id}))->{id};
 }
 
 =head2 storage_can_replicate

@@ -1,7 +1,7 @@
 # QuantaStor PVE Plugin
 
 A [Proxmox VE](https://www.proxmox.com/en/proxmox-virtual-environment) storage plugin that integrates
-[QuantaStor](https://www.osnexus.com/products/software-defined-storage) as a first-class iSCSI block
+[QuantaStor](https://www.osnexus.com/products/software-defined-storage) as a first-class iSCSI (or Fibre Channel) block
 storage backend for virtual machines and containers.
 
 ---
@@ -12,8 +12,9 @@ storage backend for virtual machines and containers.
 |---|---|
 | `QuantaStor/APIClient.pm` | Complete — clean REST client, 50 unit tests |
 | `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 61 unit tests |
+| `QuantaStor/FCManager.pm` | Complete — Fibre Channel attach and detach, unit tests against a simulated `/sys` and `/dev` |
 | `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 80 unit tests |
-| Debian packaging | Complete — `pve-storage-quantastor_1.1.2-1_all.deb` |
+| Debian packaging | Complete — `pve-storage-quantastor_1.2.0-1_all.deb` |
 
 ---
 
@@ -23,7 +24,7 @@ Install the package on **every node** in the cluster. Use `apt` so the dependenc
 (`open-iscsi`, `multipath-tools`) are installed too:
 
 ```bash
-apt install ./pve-storage-quantastor_1.1.2-1_all.deb
+apt install ./pve-storage-quantastor_1.2.0-1_all.deb
 ```
 
 Then add the storage from any node:
@@ -50,6 +51,7 @@ Add → **QuantaStor**.
 | [Installation](docs/installation.md) | Package install, upgrading and downgrading, upgrading from the patch-based alpha, manual install, building the package |
 | [Configuration](docs/configuration.md) | Credentials, API tokens, the web UI and CLI options, QuantaStor HA storage pools, multiple Proxmox clusters, verifying the setup |
 | [Multipath (DM-MPIO)](docs/multipath.md) | Using every iSCSI portal the appliance advertises, path loss behavior, network layout |
+| [Fibre Channel](docs/fibre-channel.md) | Attaching volumes over FC instead of iSCSI: requirements, zoning, adding the storage, troubleshooting |
 | [Container (LXC) support](docs/containers.md) | How container volumes work and their limitations |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and how to resolve them |
 | [Known limitations and supported versions](docs/limitations.md) | Behavior to know about, one storage pool per Proxmox cluster, supported Proxmox VE versions, mixed-version clusters |

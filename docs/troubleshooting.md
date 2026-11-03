@@ -134,9 +134,11 @@ verbatim.
 
 ## `Plugin "..." is implementing an older storage API, an upgrade is recommended`
 
-Cosmetic warning that fires from every PVE daemon's plugin scan on PVE 9.2+
-because the plugin declares `api()=13` for 9.1 compatibility. See
-[Known limitations](limitations.md#older-storage-api-warning-on-pve-92).
+Informational warning from every PVE daemon's plugin scan. It appears only on a
+PVE release newer than the plugin has been tested against (storage `APIVER`
+above 16). On PVE 9.2 it means the node runs a plugin release older than 1.2.0;
+upgrade the plugin. See
+[Known limitations](limitations.md#older-storage-api-warning-on-newer-pve-releases).
 
 ## `Error loading storage plugin: implements an API version newer than current (N > M)`
 
@@ -148,6 +150,24 @@ will not appear in `pvesm` or the UI. Resolution:
   later (where `api()` was reverted from 14 back to 13).
 - **For 8.4.0 customers**: not supported by this plugin (the archived
   patch-based alpha, GitHub tag `v0.1-alpha`, was the last to target 8.4).
+
+## `QuantaStor API error in '...': TypeNotFound(Type not found: ...)`
+
+Symptom: a storage operation or `pvesm list` fails now and then with, for
+example, `TypeNotFound(Type not found: ipAddress)` or
+`TypeNotFound(Type not found: freeSpace)`; the same command works when run
+again.
+
+Cause: the REST service on some QuantaStor releases fails a few concurrent
+requests with this error. Every Proxmox node polls the appliance, so a busy
+cluster, or several clusters on one appliance, sends concurrent requests all
+the time.
+
+The plugin retries read requests that fail this way (up to three attempts, a
+`retrying` warning in the journal for each). It does not retry changes such as
+creating or deleting a volume, because a failed change may still have been
+applied: run the Proxmox operation again. If the error persists, contact
+OSNEXUS support.
 
 ## Storage shows `active` on some nodes, `inactive` on others
 
@@ -170,6 +190,48 @@ Their iSCSI sessions to the same volume can knock each other off, and when
 one side detaches a volume, the access it removes is access the other side is
 still using.
 
+The plugin refuses to activate the storage on a node whose initiator name is
+already registered under another node's name, so `pvesm status` shows the
+storage inactive there and the journal shows:
+
+```
+QuantaStor storage '<storage>': this node's iSCSI initiator name <iqn> is already
+registered on QuantaStor as host '<other node>-pve', not '<this node>-pve'. ...
+```
+
+If the two names belong to the same node because it was renamed, rename the
+host entry on QuantaStor instead and the storage activates again:
+
+```bash
+qs host-modify --host=<old node>-pve --hostname=<this node>-pve
+```
+
+Host entries whose names do not end in `-pve` were created or renamed by an
+administrator, and the plugin does not check them.
+
+A second cause gives the same symptom without any message: nodes in different
+clusters with the same hostname. Both register as `<hostname>-pve`, and
+QuantaStor adds the second node's initiator name to the first node's host
+entry, so the two nodes share one host. To check, list the initiator names of
+each node's host entry on QuantaStor; more than one means it is shared:
+
+```bash
+qs host-initiator-list --host=<hostname>-pve
+```
+
+The fix is a unique hostname for one of the nodes (see the Proxmox
+documentation on renaming a node). The storage then stays inactive on the
+renamed node, and its error message ends with the command that removes its
+initiator name from the shared entry:
+
+```bash
+qs host-initiator-remove --host=<old hostname>-pve --iqn=<renamed node's iqn>
+```
+
+Run it, then `pvesm status` on the renamed node registers it under its new
+name. Do not rename the shared entry instead: it still belongs to the other
+node.
+
 Check every node of every cluster:
 
 ```bash
@@ -191,6 +253,21 @@ pvesm status    # re-registers the node with QuantaStor under its new name
 
 Run `qs host-list` again on QuantaStor and confirm each node now has its own
 host entry.
+
+## Backup fails with `job failed with err -61 - No data available` after a rollback
+
+Symptom: after rolling a VM back to a snapshot taken before the disk was
+resized, the guest sees the larger size, and `vzdump` fails with `err -61`.
+The node's kernel log shows `Medium Error` / `Unrecovered read error` for the
+disk.
+
+Cause: plugin releases before 1.2.0 rolled back while the volume had no host
+assigned, and QuantaStor then kept the iSCSI LUN at the size it had before the
+rollback, larger than the volume itself. 1.2.0 assigns the node first, so the
+LUN gets the right size.
+
+Fix for a disk that is already affected: grow it, which makes QuantaStor
+resync the LUN size, for example `qm resize <vmid> <disk> +1G`.
 
 ## A `qm move-disk` or VM migration to another cluster node fails
 

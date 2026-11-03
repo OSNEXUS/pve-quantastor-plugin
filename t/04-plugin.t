@@ -115,6 +115,17 @@ subtest 'type returns quantastor' => sub {
     is $CLASS->type(), 'quantastor', 'type is quantastor';
 };
 
+subtest 'api reports the node storage API version within 13..16' => sub {
+    no warnings 'redefine';
+    for my $case ([11, 13], [13, 13], [14, 14], [16, 16], [17, 16]) {
+        my ($node, $want) = @$case;
+        local *PVE::Storage::APIVER = sub { $node };
+        is $CLASS->api(), $want, "node APIVER $node -> $want";
+    }
+    local *PVE::Storage::APIVER;
+    is $CLASS->api(), 13, 'PVE::Storage not loaded -> 13';
+};
+
 subtest 'plugindata declares images and rootdir content' => sub {
     my $pd = $CLASS->plugindata();
     ok $pd->{content}[0]{images},  'images content type supported (VM disks)';
@@ -499,8 +510,114 @@ subtest 'activate_storage is idempotent when host exists' => sub {
     );
 };
 
+# hostGet fields as returned by a QuantaStor 6.9 appliance (trimmed).
+sub host_get_reply {
+    my ($name) = @_;
+    return {
+        id               => $HOST_UUID,
+        name             => $name,
+        description      => 'Registered by Proxmox VE QuantaStor plugin',
+        initiatorPortList => [ { iqn => 'iqn.1993-08.org.debian:01:44929f852f9b', type => 13 } ],
+    };
+}
+
+subtest 'activate_storage accepts the host this node registered' => sub {
+    with_mocks(
+        {
+            storagePoolGet => { id => $POOL_UUID, size => 1024, freeSpace => 512 },
+            hostGet        => host_get_reply(Sys::Hostname::hostname() . '-pve'),
+        },
+        {},
+        sub {
+            my ($ua) = @_;
+            is $CLASS->activate_storage('qs1', make_scfg(), {}), 1, 'activates';
+            ok !$ua->was_called('hostAdd'), 'no re-registration';
+        }
+    );
+};
+
+subtest 'activate_storage refuses an IQN another node registered' => sub {
+    with_mocks(
+        {
+            storagePoolGet => { id => $POOL_UUID, size => 1024, freeSpace => 512 },
+            hostGet        => host_get_reply('other-node-pve'),
+        },
+        {},
+        sub {
+            my ($ua) = @_;
+            eval { $CLASS->activate_storage('qs1', make_scfg(), {}) };
+            like $@, qr/registered on QuantaStor as host 'other-node-pve'/, 'names the other host';
+            like $@, qr/\Q'Storage only works on one cluster at a time'\E/, 'points at troubleshooting';
+            like $@, qr/qs host-modify --host=other-node-pve --hostname=\S+-pve/, 'gives the rename command';
+            ok !$ua->was_called('hostAdd'), 'no registration';
+        }
+    );
+};
+
+# Two nodes with the same hostname share one host entry; after one is renamed,
+# renaming that entry would take it from the other node.
+subtest 'activate_storage on a renamed node sharing a host gives the remove command' => sub {
+    my $reply = host_get_reply('other-node-pve');
+    push @{ $reply->{initiatorPortList} }, { iqn => $LOCAL_IQN, type => 13 };
+    with_mocks(
+        {
+            storagePoolGet => { id => $POOL_UUID, size => 1024, freeSpace => 512 },
+            hostGet        => $reply,
+        },
+        {},
+        sub {
+            my ($ua) = @_;
+            eval { $CLASS->activate_storage('qs1', make_scfg(), {}) };
+            like $@, qr/\Qqs host-initiator-remove --host=other-node-pve --iqn=$LOCAL_IQN\E/,
+                'gives the remove command';
+            unlike $@, qr/host-modify/, 'does not suggest renaming the shared host';
+            ok !$ua->was_called('hostAdd'), 'no registration';
+        }
+    );
+};
+
+subtest 'activate_storage leaves an admin-named host alone' => sub {
+    with_mocks(
+        {
+            storagePoolGet => { id => $POOL_UUID, size => 1024, freeSpace => 512 },
+            hostGet        => host_get_reply('esx-lab-07'),
+        },
+        {},
+        sub {
+            is $CLASS->activate_storage('qs1', make_scfg(), {}), 1, 'activates';
+        }
+    );
+};
+
 # An unreadable listing must not look empty: find_free_diskname would then
 # hand out a name that already exists.
+subtest 'get_identity returns the pool UUID' => sub {
+    for my $case (['pool-1', 'pool-1', 'pool name resolves to its UUID'],
+                  [$POOL_ID, $POOL_UUID, 'qs- prefixed id resolves with the prefix stripped']) {
+        my ($pool_id, $asked, $label) = @$case;
+        with_mocks(
+            { storagePoolGet => { id => $POOL_UUID, name => 'pool-1' } },
+            {},
+            sub {
+                my ($ua) = @_;
+                is $CLASS->get_identity({ %{ make_scfg() }, pool_id => $pool_id }, 'qs1'), $POOL_UUID, $label;
+                is $ua->params_for('storagePoolGet')->{storagePool}, $asked, "looked up '$asked'";
+            }
+        );
+    }
+};
+
+subtest 'get_identity dies when the pool lookup fails' => sub {
+    with_mocks(
+        { storagePoolGet => { _http_error => '500 Server Error' } },
+        {},
+        sub {
+            eval { $CLASS->get_identity(make_scfg(), 'qs1') };
+            like $@, qr/storagePoolGet/, 'error surfaces instead of a bogus id';
+        }
+    );
+};
+
 subtest 'list_images dies when the pool lookup fails' => sub {
     with_mocks(
         { storagePoolGet => { _http_error => '500 Server Error' } },
@@ -992,6 +1109,19 @@ subtest 'deactivate_volume logs out and removes ACL' => sub {
 # 9b. volume_resize
 # ---------------------------------------------------------------------------
 
+subtest 'volume_resize refuses to resize a snapshot' => sub {
+    with_mocks(
+        { storageVolumeGet => { id => $VOL_UUID, iqn => $VOL_IQN } },
+        {},
+        sub {
+            my ($ua) = @_;
+            eval { $CLASS->volume_resize(make_scfg(), 'qs1', 'vm-100-disk-0', 1024, 0, 'snap1') };
+            like $@, qr/resizing a snapshot is not supported/, 'dies';
+            ok !$ua->was_called('storageVolumeResize'), 'nothing resized';
+        }
+    );
+};
+
 subtest 'volume_resize online (running VM): force flag + rescan, no logout' => sub {
     # Online resize: keep QEMU's fd valid by NOT logging out. Pass flags=2 to
     # bypass QS's active-session rejection (err=76). Rescan so the kernel
@@ -1228,6 +1358,8 @@ subtest 'volume_snapshot_rollback: logout then rollback when session active, no 
         {
             storageVolumeGet      => { id => $VOL_UUID, iqn => $VOL_IQN },
             storageVolumeRollback => { id => $VOL_UUID },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            hostGet => { id => $HOST_UUID },
             sessionEnum           => [],   # QS confirms no sessions
         },
         {
@@ -1257,6 +1389,8 @@ subtest 'volume_snapshot_rollback: skips iSCSI ops when volume not active' => su
         {
             storageVolumeGet      => { id => $VOL_UUID, iqn => $VOL_IQN },
             storageVolumeRollback => { id => $VOL_UUID },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            hostGet => { id => $HOST_UUID },
             sessionEnum           => [],
         },
         {
@@ -1280,6 +1414,8 @@ subtest 'volume_snapshot_rollback waits for QS-side session GC before calling ro
         {
             storageVolumeGet      => { id => $VOL_UUID, iqn => $VOL_IQN },
             storageVolumeRollback => { id => $VOL_UUID },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            hostGet => { id => $HOST_UUID },
             sessionEnum           => [],   # QS-side already idle
         },
         { 'session' => { _error => 'no sessions' } },
@@ -1298,6 +1434,64 @@ subtest 'volume_snapshot_rollback waits for QS-side session GC before calling ro
                 'sessionEnum happens before storageVolumeRollback';
         }
     );
+};
+
+# QuantaStor resizes the LUN on rollback only while a host is assigned; PVE's
+# deactivate on stop removed ours, so a rollback past a resize kept the larger size.
+sub rollback_acl_mocks {
+    my ($acl_calls, %over) = @_;
+    return {
+        storageVolumeGet            => { id => $VOL_UUID, iqn => $VOL_IQN },
+        storageVolumeRollback       => { id => $VOL_UUID },
+        storageVolumeAclAddRemoveEx => sub { push @$acl_calls, $_[0]; return { status => 'ok' } },
+        hostGet                     => { id => $HOST_UUID },
+        sessionEnum                 => [],
+        %over,
+    };
+}
+
+subtest 'volume_snapshot_rollback assigns this node only for the rollback' => sub {
+    my @acl;
+    with_mocks(rollback_acl_mocks(\@acl), { 'session' => { _error => 'no sessions' } }, sub {
+        my ($ua, $runner) = @_;
+        $CLASS->volume_snapshot_rollback(make_scfg(), 'qs1', 'vm-100-disk-0', 'snap1');
+
+        my @seq = map { /qstorapi\/(\w+)/ ? $1 : () } @{ $ua->requests_made };
+        @seq = grep { /AclAddRemoveEx|Rollback/ } @seq;
+        is_deeply \@seq, [qw(storageVolumeAclAddRemoveEx storageVolumeRollback storageVolumeAclAddRemoveEx)],
+            'ACL added, rollback, ACL removed';
+        is_deeply [ map { [ @$_{qw(storageVolumeList host modType)} ] } @acl ],
+            [ [ $VOL_UUID, $LOCAL_IQN, 0 ], [ $VOL_UUID, $HOST_UUID, 1 ] ],
+            'add for this node, remove of this node\'s host';
+        ok !$runner->was_called('node --login'), 'no login';
+    });
+};
+
+subtest 'volume_snapshot_rollback removes the ACL when the rollback fails' => sub {
+    my @acl;
+    with_mocks(rollback_acl_mocks(\@acl, storageVolumeRollback => { RestError => 'rollback refused' }),
+        { 'session' => { _error => 'no sessions' } }, sub {
+        eval { $CLASS->volume_snapshot_rollback(make_scfg(), 'qs1', 'vm-100-disk-0', 'snap1') };
+        like $@, qr/rollback refused/, 'rollback error propagated';
+        is_deeply [ map { $_->{modType} } @acl ], [ 0, 1 ], 'ACL still removed';
+    });
+};
+
+subtest 'volume_snapshot_rollback retries a transient 5xx ACL add' => sub {
+    my @acl;
+    my $fails = 1;
+    with_mocks(rollback_acl_mocks(\@acl,
+            storageVolumeAclAddRemoveEx => sub {
+                push @acl, $_[0];
+                return $fails-- > 0 ? { _http_error => '500 interrupted by signal' } : { status => 'ok' };
+            }),
+        { 'session' => { _error => 'no sessions' } }, sub {
+        my ($ua) = @_;
+        local $PVE::Storage::Custom::QuantaStor::ACL_ADD_RETRY_SECS = 0;
+        $CLASS->volume_snapshot_rollback(make_scfg(), 'qs1', 'vm-100-disk-0', 'snap1');
+        is_deeply [ map { $_->{modType} } @acl ], [ 0, 0, 1 ], 'add retried, then removed';
+        ok $ua->was_called('storageVolumeRollback'), 'rollback ran';
+    });
 };
 
 subtest 'volume_rollback_is_possible returns 1 for most-recent snap' => sub {
@@ -1349,6 +1543,246 @@ subtest 'volume_rollback_is_possible dies when newer snap exists' => sub {
             };
             like $@, qr/not the most recent snapshot/, 'dies when blocked';
             is $blockers[0], 'vm-100-disk-0_snap2', 'blocker name populated';
+        }
+    );
+};
+
+# ---------------------------------------------------------------------------
+# 9c. Fibre Channel transport (transport => 'fc')
+# ---------------------------------------------------------------------------
+#
+# Same plugin hooks, FCManager instead of ISCSIManager. The FC manager reads a
+# fixture /sys and /dev tree in a temp dir; the appliance side is the usual
+# MockUA. NOTE: the FC transport is not yet validated on hardware — these tests
+# pin the intended contract, not observed behaviour.
+
+use File::Temp qw(tempdir);
+use File::Path qw(make_path);
+use PVE::Storage::QuantaStor::FCManager;
+
+my $FC_DESC = '0123456789abcdef01234567';
+my $FC_WWID = '3' . '62000000' . $FC_DESC;
+
+sub make_fc_scfg { my $s = make_scfg(); $s->{transport} = 'fc'; return $s }
+
+sub _fc_write { my ($p, $c) = @_; open my $fh, '>', $p or die $!; print $fh $c; close $fh }
+
+# Returns ($sysfs, $dev) roots populated per %f (fc_hosts, sd, byid) — see t/06.
+sub make_fc_tree {
+    my (%f) = @_;
+    my $root = tempdir(CLEANUP => 1);
+    my ($sysfs, $dev) = ("$root/sys", "$root/dev");
+    make_path("$sysfs/class/fc_host", "$sysfs/class/scsi_host", "$sysfs/block", "$dev/disk/by-id");
+    for my $h (sort keys %{ $f{fc_hosts} // {} }) {
+        make_path("$sysfs/class/fc_host/$h", "$sysfs/class/scsi_host/$h");
+        _fc_write("$sysfs/class/fc_host/$h/port_name", "$f{fc_hosts}{$h}\n");
+        _fc_write("$sysfs/class/scsi_host/$h/scan", '');
+    }
+    for my $sd (sort keys %{ $f{sd} // {} }) {
+        make_path("$sysfs/block/$sd/device");
+        _fc_write("$sysfs/block/$sd/device/$_", $_ eq 'wwid' ? "$f{sd}{$sd}\n" : '') for qw(wwid delete rescan);
+    }
+    _fc_write("$dev/disk/by-id/$_", '') for @{ $f{byid} // [] };
+    return ($sysfs, $dev);
+}
+
+sub _slurp { my ($p) = @_; open my $fh, '<', $p or die $!; local $/; return scalar <$fh> }
+
+# Like with_mocks, but the transport factory hands out an FCManager over the
+# fixture tree. $fc_opts: fc_hosts/sd/byid for the tree, plus optional
+# path_exists override.
+sub with_fc_mocks {
+    my ($ua_responses, $fc_opts, $test_sub) = @_;
+
+    my $ua = Test::QuantaStor::MockUA->new(responses => $ua_responses);
+    my $runner = Test::QuantaStor::MockCmdRunner->new(responses => {});
+    my ($sysfs, $dev) = make_fc_tree(%$fc_opts);
+
+    no warnings 'redefine';
+    local *PVE::Storage::Custom::QuantaStor::_client = sub {
+        return PVE::Storage::QuantaStor::APIClient->new(
+            host => $API_HOST, username => 'admin', password => 'x',
+            _ua => $ua, _sleep => sub { },
+        );
+    };
+    local *PVE::Storage::Custom::QuantaStor::_fc = sub {
+        return PVE::Storage::QuantaStor::FCManager->new(
+            _sysfs_root => $sysfs, _dev_root => $dev,
+            _run_cmd    => $runner->as_coderef,
+            _sleep      => sub { },
+            ($fc_opts->{path_exists} ? (_path_exists => $fc_opts->{path_exists}) : ()),
+        );
+    };
+
+    $test_sub->($ua, $runner, $sysfs, $dev);
+}
+
+subtest 'FC: options mark transport optional and fixed' => sub {
+    my $opts = $CLASS->options();
+    ok $opts->{transport}{optional}, 'optional';
+    ok $opts->{transport}{fixed},    'fixed after creation';
+    is_deeply $CLASS->properties()->{transport}{enum}, ['iscsi', 'fc'], 'enum iscsi|fc';
+};
+
+subtest 'FC: activate_storage registers every HBA WWPN under one host' => sub {
+    my %seen;
+    with_fc_mocks(
+        {
+            storagePoolGet => { id => $POOL_UUID, size => 1024, freeSpace => 512 },
+            hostGet => sub {
+                my ($p) = @_;
+                $seen{$p->{host}}++;
+                return { RestError => 'Failed to locate host with IQN' };
+            },
+            hostAdd          => { obj => { id => $HOST_UUID } },
+            hostInitiatorAdd => { obj => { id => $HOST_UUID } },
+        },
+        { fc_hosts => { host3 => '0x21000024ff0a0b0c', host5 => '0x21000024ff0a0b0d' } },
+        sub {
+            my ($ua) = @_;
+            $CLASS->activate_storage('qs1', make_fc_scfg(), {});
+            is $ua->params_for('hostAdd')->{iqn}, '21000024ff0a0b0c', 'host created with the primary WWPN';
+            is $ua->params_for('hostInitiatorAdd')->{iqn}, '21000024ff0a0b0d', 'second WWPN added to the same host';
+            is $ua->params_for('hostInitiatorAdd')->{host}, $HOST_UUID, 'by host id';
+        }
+    );
+};
+
+subtest 'FC: _transport picks FCManager only when transport=fc' => sub {
+    my $fc    = PVE::Storage::Custom::QuantaStor::_transport(make_fc_scfg(), 'qs1');
+    my $iscsi = PVE::Storage::Custom::QuantaStor::_transport(make_scfg(),    'qs1');
+    isa_ok $fc,    'PVE::Storage::QuantaStor::FCManager';
+    isa_ok $iscsi, 'PVE::Storage::QuantaStor::ISCSIManager';
+};
+
+subtest 'FC: path resolves the LUN by WWID under /dev/disk/by-id' => sub {
+    with_fc_mocks(
+        { storageVolumeGet => { id => $VOL_UUID, deviceDescriptor => $FC_DESC, lun => 7 } },
+        { byid => [ "dm-uuid-mpath-$FC_WWID" ] },
+        sub {
+            my ($ua, $runner, $sysfs, $dev) = @_;
+            my ($path, $vmid, $vtype) = $CLASS->path(make_fc_scfg(), 'vm-100-disk-0', 'qs1');
+            is $path, "$dev/disk/by-id/dm-uuid-mpath-$FC_WWID", 'multipath by-id path, LUN number irrelevant';
+            is $vmid, 100, 'vmid';
+        }
+    );
+};
+
+subtest 'FC: path returns undef device when the volume has no device descriptor' => sub {
+    with_fc_mocks(
+        { storageVolumeGet => { id => $VOL_UUID, iqn => $VOL_IQN } },
+        {},
+        sub {
+            my ($path, $vmid) = $CLASS->path(make_fc_scfg(), 'vm-100-disk-0', 'qs1');
+            is $path, undef, 'no path without descriptor';
+            is $vmid, 100, 'vmid still parsed';
+        }
+    );
+};
+
+subtest 'FC: activate_volume grants ACL to the WWPN\'s host, rescans HBAs, waits for the LUN' => sub {
+    with_fc_mocks(
+        {
+            storageVolumeGet            => { id => $VOL_UUID, deviceDescriptor => $FC_DESC },
+            hostGet                     => { id => $HOST_UUID, name => 'pve-node1-pve' },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+        },
+        {
+            fc_hosts => { host3 => '0x21000024ff0a0b0c', host5 => '0x21000024ff0a0b0d' },
+            # LUN "appears" on the second existence check (after the scan).
+            path_exists => do { my $n = 0; sub { ++$n > 2 ? 1 : 0 } },
+        },
+        sub {
+            my ($ua, $runner, $sysfs) = @_;
+            $CLASS->activate_volume('qs1', make_fc_scfg(), 'vm-100-disk-0', undef, {});
+            my $p = $ua->params_for('storageVolumeAclAddRemoveEx');
+            # QuantaStor's ACL call resolves IQNs but not WWPNs, so FC passes the host ID.
+            is $p->{host},    $HOST_UUID, 'ACL keyed on the host holding the WWPN';
+            is $ua->params_for('hostGet')->{host}, '21000024ff0a0b0c', 'host looked up by the primary WWPN';
+            is $p->{modType}, 0, 'add';
+            is _slurp("$sysfs/class/scsi_host/host3/scan"), '- - -', 'host3 rescanned';
+            is _slurp("$sysfs/class/scsi_host/host5/scan"), '- - -', 'host5 rescanned';
+            my @cmds = map { $_->{cmd}[0] } @{ $runner->calls_made };
+            ok !(grep { $_ eq 'iscsiadm' } @cmds), 'no iscsiadm involved';
+            ok scalar(grep { "@{ $_->{cmd} }" eq "multipath -a $FC_WWID" } @{ $runner->calls_made }),
+                'WWID whitelisted for multipath';
+        }
+    );
+};
+
+subtest 'FC: activate_volume dies with an FC-specific message when the LUN never appears' => sub {
+    with_fc_mocks(
+        {
+            storageVolumeGet            => { id => $VOL_UUID, deviceDescriptor => $FC_DESC },
+            hostGet                     => { id => $HOST_UUID, name => 'pve-node1-pve' },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+        },
+        { fc_hosts => { host3 => '0x21000024ff0a0b0c' }, path_exists => sub { 0 } },
+        sub {
+            eval { $CLASS->activate_volume('qs1', make_fc_scfg(), 'vm-100-disk-0', undef, {}) };
+            like $@, qr/FC multipath map .* did not appear .* zoning/s, 'mentions FC and zoning';
+        }
+    );
+};
+
+subtest 'FC: activate_volume refuses a volume without a device descriptor' => sub {
+    with_fc_mocks(
+        { storageVolumeGet => { id => $VOL_UUID, iqn => $VOL_IQN } },
+        { fc_hosts => { host3 => '0x21000024ff0a0b0c' } },
+        sub {
+            my ($ua) = @_;
+            eval { $CLASS->activate_volume('qs1', make_fc_scfg(), 'vm-100-disk-0', undef, {}) };
+            like $@, qr/no SCSI device identifier/, 'clear error';
+            ok !$ua->was_called('storageVolumeAclAddRemoveEx'), 'no ACL change attempted';
+        }
+    );
+};
+
+subtest 'FC: deactivate_volume deletes the SCSI paths, then removes the ACL' => sub {
+    with_fc_mocks(
+        {
+            storageVolumeGet            => { id => $VOL_UUID, deviceDescriptor => $FC_DESC },
+            hostGet                     => { id => $HOST_UUID },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+        },
+        {
+            fc_hosts => { host3 => '0x21000024ff0a0b0c' },
+            sd => { sdb => "naa.62000000$FC_DESC", sdc => "naa.62000000$FC_DESC" },
+            byid => [ "dm-uuid-mpath-$FC_WWID" ],
+            # by-id link vanishes once the paths are deleted (fixture tree can't
+            # do that itself): report present until detach has run.
+            path_exists => do { my $n = 0; sub { ++$n <= 1 ? 1 : 0 } },
+        },
+        sub {
+            my ($ua, $runner, $sysfs) = @_;
+            # Keep the wait bounded even though the fixture never truly detaches.
+            $CLASS->deactivate_volume('qs1', make_fc_scfg(), 'vm-100-disk-0', undef, {});
+            ok $runner->was_called("-f $FC_WWID"), 'multipath map flushed';
+            is _slurp("$sysfs/block/sdb/device/delete"), '1', 'sdb deleted';
+            is _slurp("$sysfs/block/sdc/device/delete"), '1', 'sdc deleted';
+            my $p = $ua->params_for('storageVolumeAclAddRemoveEx');
+            is $p->{modType}, 1, 'ACL removed';
+            is $ua->params_for('hostGet')->{host}, '21000024ff0a0b0c', 'host looked up by WWPN';
+        }
+    );
+};
+
+subtest 'FC: volume_resize rescans each path and resizes the multipath map' => sub {
+    with_fc_mocks(
+        {
+            storageVolumeGet    => { id => $VOL_UUID, deviceDescriptor => $FC_DESC, size => 7 * 1024**3 },
+            storageVolumeResize => { status => 'ok' },
+        },
+        {
+            sd => { sdb => "naa.62000000$FC_DESC" },
+            byid => [ "dm-uuid-mpath-$FC_WWID" ],
+        },
+        sub {
+            my ($ua, $runner, $sysfs) = @_;
+            $CLASS->volume_resize(make_fc_scfg(), 'qs1', 'vm-100-disk-0', 7 * 1024**3, 1);
+            ok $ua->was_called('storageVolumeResize'), 'resize requested';
+            is _slurp("$sysfs/block/sdb/device/rescan"), '1', 'path rescanned';
+            ok $runner->was_called("resize map $FC_WWID"), 'multipathd resize map';
         }
     );
 };
@@ -1436,6 +1870,62 @@ subtest 'clone_image clones template snapshot and logs in' => sub {
             my $p = $ua->params_for('storageVolumeClone');
             is $p->{storageVolume}, 'template-base-100-disk-0', 'cloned from template snap';
             ok $runner->was_called('node --login'), 'logged in to clone';
+        }
+    );
+};
+
+subtest 'clone_image moves to the next disk number when the picked name exists' => sub {
+    my @tried;
+    with_mocks(
+        {
+            storageVolumeClone => sub {
+                my ($params) = @_;
+                push @tried, $params->{cloneName};
+                return @tried < 2 ? { RestError => $EXISTS_ERR }
+                                  : { obj => { id => 'clone-uuid', iqn => 'iqn.x:vm-101-disk-1' } };
+            },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            storageVolumeEnum           => [],
+        },
+        { 'discovery' => '', 'node --login' => '' },
+        sub {
+            my $name = $CLASS->clone_image(make_scfg(), 'qs1', 'base-100-disk-0', 101);
+            is_deeply \@tried, [qw(vm-101-disk-0 vm-101-disk-1)], 'tried consecutive disk numbers';
+            is $name, 'vm-101-disk-1', 'returned the name that was cloned';
+        }
+    );
+};
+
+subtest 'clone_image gives up after the name budget' => sub {
+    my $calls = 0;
+    with_mocks(
+        {
+            storageVolumeClone => sub { $calls++; return { RestError => $EXISTS_ERR } },
+            storageVolumeEnum  => [],
+        },
+        {},
+        sub {
+            no warnings 'once';   # fully-qualified knob referenced once here
+            local $PVE::Storage::Custom::QuantaStor::ALLOC_NAME_ATTEMPTS = 3;
+            eval { $CLASS->clone_image(make_scfg(), 'qs1', 'base-100-disk-0', 101) };
+            like $@, qr/err=9/, 'surfaces the final error';
+            is $calls, 3, 'stopped at the configured attempt budget';
+        }
+    );
+};
+
+subtest 'clone_image does not retry other clone failures' => sub {
+    my $calls = 0;
+    with_mocks(
+        {
+            storageVolumeClone => sub { $calls++; return { RestError => 'Insufficient space in pool [err=12]' } },
+            storageVolumeEnum  => [],
+        },
+        {},
+        sub {
+            eval { $CLASS->clone_image(make_scfg(), 'qs1', 'base-100-disk-0', 101) };
+            like $@, qr/err=12/, 'surfaces the error';
+            is $calls, 1, 'no retry';
         }
     );
 };
@@ -1583,6 +2073,8 @@ subtest 'multipath: volume_snapshot_rollback flushes and logs out every path' =>
             storageVolumeGet         => $MP_VOL,
             sessionEnum              => [],
             storageVolumeRollback    => { status => 'ok' },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            hostGet => { id => $HOST_UUID },
         },
         { session => [ $MP_SESS, $MP_SESS, $MP_SESS, { _error => 'No active sessions' } ] },
         sub {
@@ -1695,6 +2187,135 @@ subtest 'container rootfs volume is handled like a raw VM disk' => sub {
             my $name = $CLASS->alloc_image('qs1', make_scfg(), 200, 'raw', undef, 8192);
             like $name, qr/^vm-200-disk-/, 'alloc_image creates a raw CT rootfs LUN';
             ok $ua->was_called('storageVolumeCreate'), 'create API called for CT rootfs';
+        }
+    );
+};
+
+# ---------------------------------------------------------------------------
+# volume_prefix (several clusters sharing one pool)
+# ---------------------------------------------------------------------------
+
+sub px_scfg { return { %{ make_scfg() }, volume_prefix => 'cA-' } }
+
+subtest 'volume_prefix is optional and fixed after add' => sub {
+    my $opt = $CLASS->options()->{volume_prefix};
+    ok $opt->{optional}, 'optional';
+    ok $opt->{fixed},    'fixed';
+};
+
+subtest 'volume_prefix pattern follows QuantaStor name rules' => sub {
+    my $prop = $CLASS->properties()->{volume_prefix};
+    my $pat  = $prop->{pattern};
+    for my $ok (qw(cA- clusterA- c1. x_ 9 vm- base-x template tmpl- c-vm-x)) {
+        like $ok, qr/^$pat$/, "'$ok' accepted";
+    }
+    # Starting like a PVE volume; 'vm-<n>-' inside (storage 'c-' would list
+    # 'c-vm-7-vm-100-disk-0' as VM 7's disk); ending in 'template-' (names
+    # would match template snapshots of the storage without that ending).
+    for my $bad ('-a', '_a', 'a b', 'a/', 'a:', 'vm-1-', 'base-12', 'subvol-3-x',
+                 'c-vm-7-', 'x.basevol-12-', 'template-', 'cA-template-') {
+        unlike $bad, qr/^$pat$/, "'$bad' rejected";
+    }
+    is $prop->{maxLength}, 32, 'length capped so the snapshot name stays within 128';
+};
+
+subtest 'list_images shows only its own prefix, with the prefix stripped' => sub {
+    with_mocks(
+        {
+            storageVolumeEnum => [
+                map { { id => $_, name => $_, size => 1, storagePoolId => $POOL_UUID,
+                        isSnapshot => '0' } }
+                    qw(cA-vm-100-disk-0 cB-vm-100-disk-0 vm-100-disk-1 cA-base-101-disk-0),
+            ],
+        },
+        {},
+        sub {
+            my @ids = sort map { $_->{volid} }
+                @{ $CLASS->list_images('qs1', px_scfg(), undef, undef, {}) };
+            is_deeply \@ids, ['qs1:base-101-disk-0', 'qs1:vm-100-disk-0'], 'prefixed storage';
+
+            @ids = sort map { $_->{volid} }
+                @{ $CLASS->list_images('qs1', make_scfg(), undef, undef, {}) };
+            is_deeply \@ids, ['qs1:vm-100-disk-1'], 'unprefixed storage sees no prefixed volume';
+        }
+    );
+};
+
+subtest 'alloc_image creates the prefixed name and returns the PVE name' => sub {
+    my @tried;
+    with_mocks(
+        {
+            storageVolumeCreate => sub {
+                push @tried, $_[0]{name};
+                return @tried < 2 ? { RestError => $EXISTS_ERR } : { id => $VOL_UUID };
+            },
+        },
+        {},
+        sub {
+            # A prefix ending in a digit: the err=9 retry still bumps the disk number.
+            my $scfg = { %{ make_scfg() }, volume_prefix => 'c7' };
+            my $name = $CLASS->alloc_image('qs1', $scfg, 100, 'raw', undef, 10240);
+            is_deeply \@tried, [qw(c7vm-100-disk-0 c7vm-100-disk-1)], 'prefixed names tried';
+            is $name, 'vm-100-disk-1', 'PVE volname has no prefix';
+        }
+    );
+};
+
+subtest 'path and snapshots use the prefixed name' => sub {
+    with_mocks(
+        {
+            storageVolumeGet      => { id => $VOL_UUID, iqn => $VOL_IQN },
+            storageVolumeSnapshot => { id => 'snap-uuid' },
+        },
+        {},
+        sub {
+            my ($ua) = @_;
+            $CLASS->path(px_scfg(), 'vm-100-disk-0', 'qs1', 'snap1');
+            is $ua->params_for('storageVolumeGet')->{storageVolume}, 'cA-vm-100-disk-0_snap1',
+                'path looks up the prefixed snapshot volume';
+
+            $CLASS->volume_snapshot(px_scfg(), 'qs1', 'vm-100-disk-0', 'snap1');
+            my $p = $ua->params_for('storageVolumeSnapshot');
+            is $p->{storageVolume}, 'cA-vm-100-disk-0',       'source volume';
+            is $p->{snapshotName},  'cA-vm-100-disk-0_snap1', 'snapshot name';
+        }
+    );
+};
+
+subtest 'create_base and clone_image use prefixed QuantaStor names' => sub {
+    my @got;
+    with_mocks(
+        {
+            storageVolumeGet            => sub { push @got, $_[0]{storageVolume};
+                                                 return { id => $VOL_UUID, iqn => $VOL_IQN } },
+            hostGet                     => { id => $HOST_UUID },
+            storageVolumeAclAddRemoveEx => { status => 'ok' },
+            storageVolumeModify         => { id => $VOL_UUID },
+            storageVolumeSnapshot       => { id => 'tmpl-snap-uuid' },
+            storageVolumeClone          => { obj => { id => 'clone-uuid', iqn => $VOL_IQN } },
+            sessionEnum                 => [],
+        },
+        {
+            'node --logout' => '',
+            'session'       => { _error => 'no sessions' },
+            'discovery'     => '',
+            'node --login'  => '',
+        },
+        sub {
+            my ($ua) = @_;
+            is $CLASS->create_base('qs1', px_scfg(), 'vm-100-disk-0'), 'base-100-disk-0',
+                'create_base returns the PVE name';
+            is_deeply \@got, [qw(cA-vm-100-disk-0 cA-base-100-disk-0)], 'looked up prefixed names';
+            is $ua->params_for('storageVolumeModify')->{newName}, 'cA-base-100-disk-0', 'renamed';
+            my $s = $ua->params_for('storageVolumeSnapshot');
+            is $s->{storageVolume}, 'cA-base-100-disk-0',          'template taken of the base';
+            is $s->{snapshotName},  'cA-template-base-100-disk-0', 'template snapshot name';
+
+            is $CLASS->clone_image(px_scfg(), 'qs1', 'base-100-disk-0', 101), 'vm-101-disk-0',
+                'clone_image returns the PVE name';
+            my $c = $ua->params_for('storageVolumeClone');
+            is $c->{storageVolume}, 'cA-template-base-100-disk-0', 'cloned from the template';
+            is $c->{cloneName},     'cA-vm-101-disk-0',            'clone name';
         }
     );
 };
