@@ -642,6 +642,47 @@ subtest 'an app token credential is passed through Basic auth untouched' => sub 
         'appKey and prefixed token joined verbatim (server splits on the first colon)';
 };
 
+subtest 'default HTTP timeout outlasts slow QuantaStor calls' => sub {
+    my $client = PVE::Storage::QuantaStor::APIClient->new(host => 'x', username => 'u', password => 'p');
+    is $client->_ua->timeout, 120, '120 s by default';
+    my $short = PVE::Storage::QuantaStor::APIClient->new(host => 'x', username => 'u', password => 'p', timeout => 5);
+    is $short->_ua->timeout, 5, 'caller can still override';
+};
+
+subtest 'ensure_host_registered adds missing extra initiators to the host' => sub {
+    # FC hosts carry one WWPN per HBA port; the primary registers the host, the
+    # rest join it via hostInitiatorAdd unless QuantaStor already knows them.
+    my $ua = Test::QuantaStor::MockUA->new(responses => {
+        hostGet => sub {
+            my ($p) = @_;
+            return { id => 'host-uuid', name => 'pve-node1' } if $p->{host} eq '21000024ff0a0b0c';
+            return { id => 'host-uuid', name => 'pve-node1' } if $p->{host} eq '21000024ff0a0b0e';  # already attached
+            return { RestError => 'Failed to locate host with IQN' };
+        },
+        hostInitiatorAdd => { obj => { id => 'host-uuid' } },
+    });
+    my $client = PVE::Storage::QuantaStor::APIClient->new(
+        host => '10.0.0.1', username => 'admin', password => 'x', _ua => $ua,
+    );
+
+    my $id = $client->ensure_host_registered('pve-node1', '21000024ff0a0b0c',
+        extra_initiators => ['21000024ff0a0b0d', '21000024ff0a0b0e']);
+    is $id, 'host-uuid', 'existing host id returned';
+    ok !$ua->was_called('hostAdd'), 'host not re-created';
+    my @adds = grep { m{/qstorapi/hostInitiatorAdd\?} } @{ $ua->requests_made };
+    is scalar @adds, 1, 'exactly one initiator added';
+    like $adds[0], qr/host=host-uuid/,        'added to the host by id';
+    like $adds[0], qr/iqn=21000024ff0a0b0d/,  'the unknown WWPN, not the known one';
+};
+
+subtest 'host_initiator_add sends host and iqn' => sub {
+    my ($client, $ua) = make_client(hostInitiatorAdd => { obj => { id => 'h' } });
+    $client->host_initiator_add('host-uuid', '21000024ff0a0b0d');
+    my $params = $ua->params_for('hostInitiatorAdd');
+    is $params->{host}, 'host-uuid',        'host param';
+    is $params->{iqn},  '21000024ff0a0b0d', 'iqn param carries the WWPN';
+};
+
 # ---------------------------------------------------------------------------
 # 16. Logger injection
 # ---------------------------------------------------------------------------
@@ -663,6 +704,61 @@ subtest 'logger is called with level and message' => sub {
     ok scalar @log_entries > 0, 'logger was called';
     is $log_entries[0][0], 'debug', 'first arg is level';
     like $log_entries[0][1], qr/storagePoolGet/, 'second arg contains method name';
+};
+
+# ---------------------------------------------------------------------------
+# Transient TypeNotFound from the appliance's REST service
+# ---------------------------------------------------------------------------
+
+my $TNF = 'TypeNotFound(Type not found: ipAddress)';
+
+# Client whose method replies come from @replies in turn; records warnings and sleeps.
+sub tnf_client {
+    my ($method, @replies) = @_;
+    my (@warn, @slept);
+    my $calls = 0;
+    my $ua = Test::QuantaStor::MockUA->new(responses => {
+        $method => sub { $calls++; return shift(@replies) // { id => 'x' } },
+    });
+    my $client = PVE::Storage::QuantaStor::APIClient->new(
+        host => '10.0.0.1', username => 'admin', password => 'secret', _ua => $ua,
+        logger => sub { push @warn, $_[1] if $_[0] eq 'warning' },
+        _sleep => sub { push @slept, $_[0] },
+    );
+    return ($client, \$calls, \@warn, \@slept);
+}
+
+subtest 'a read retries through transient TypeNotFound' => sub {
+    my ($client, $calls, $warn, $slept) = tnf_client('storageVolumeEnum',
+        { RestError => $TNF }, { RestError => $TNF }, [ { id => 'v1' } ]);
+    my $vols = $client->volume_enum();
+    is $$calls, 3, 'called three times';
+    is $vols->[0]{id}, 'v1', 'returned the data from the successful call';
+    is scalar @$warn, 2, 'one warning per retry';
+    like $warn->[0], qr/storageVolumeEnum.*TypeNotFound.*attempt 1\/3/, 'warning names the call';
+    is_deeply $slept, [1, 1], 'short pause between attempts';
+};
+
+subtest 'a read gives up after three TypeNotFound failures' => sub {
+    my ($client, $calls) = tnf_client('storagePoolGet', ({ RestError => $TNF }) x 3);
+    eval { $client->pool_get('pool-1') };
+    like $@, qr/TypeNotFound/, 'original error propagated';
+    is $$calls, 3, 'three attempts';
+};
+
+subtest 'a write is never retried on TypeNotFound' => sub {
+    my ($client, $calls, $warn) = tnf_client('storageVolumeCreate', { RestError => $TNF });
+    eval { $client->volume_create('vm-100-disk-0', 1024, 'pool-1') };
+    like $@, qr/TypeNotFound/, 'error propagated';
+    is $$calls, 1, 'one attempt';
+    is scalar @$warn, 0, 'no retry warning';
+};
+
+subtest 'a read is not retried on other errors' => sub {
+    my ($client, $calls) = tnf_client('storageVolumeGet', { RestError => 'Volume not found' });
+    eval { $client->volume_get('nope') };
+    like $@, qr/Volume not found/, 'error propagated';
+    is $$calls, 1, 'one attempt';
 };
 
 # ---------------------------------------------------------------------------

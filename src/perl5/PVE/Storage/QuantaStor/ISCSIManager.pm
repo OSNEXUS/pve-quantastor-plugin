@@ -677,4 +677,44 @@ sub rescan {
     return 1;
 }
 
+# ---------------------------------------------------------------------------
+# Transport contract
+# ---------------------------------------------------------------------------
+
+=head1 TRANSPORT CONTRACT
+
+The plugin drives every transport through the same volume-keyed methods so it
+never inspects C<$vol-E<gt>{iqn}> itself. L<PVE::Storage::QuantaStor::FCManager>
+implements the same set. The iSCSI versions are thin wrappers over the
+IQN-keyed methods above; QuantaStor presents each volume as its own target at
+LUN 0, so the IQN alone identifies the device.
+
+=head2 transport_name / initiator_ids / initiator_id / is_exported / attach /
+detach / is_attached / wait_for_attached / wait_for_detached /
+volume_device_path / rescan_volume / missing_device_hint
+
+=cut
+
+sub transport_name { return 'iscsi' }
+
+sub initiator_ids { my ($self) = @_; return ($self->get_initiator_iqn()) }
+sub initiator_id  { my ($self) = @_; return $self->get_initiator_iqn() }
+
+sub is_exported {
+    my ($self, $vol) = @_;
+    return (defined $vol->{iqn} && length $vol->{iqn}) ? 1 : 0;
+}
+
+sub attach            { my ($self, $vol) = @_;     return $self->login($vol->{iqn}) }
+sub detach            { my ($self, $vol) = @_;     return $self->logout($vol->{iqn}) }
+sub is_attached       { my ($self, $vol) = @_;     return $self->is_logged_in($vol->{iqn}) }
+sub wait_for_attached { my ($self, $vol, $m) = @_; return $self->wait_for_device($vol->{iqn}, 0, $m) }
+sub wait_for_detached { my ($self, $vol, $m) = @_; return $self->wait_for_logout($vol->{iqn}, $m) }
+sub volume_device_path { my ($self, $vol) = @_;    return $self->device_path($vol->{iqn}, 0) }
+sub rescan_volume     { my ($self, $vol) = @_;     return $self->rescan($vol->{iqn}) }
+
+sub missing_device_hint {
+    return "check that iscsid is running and the LUN is exported";
+}
+
 1;

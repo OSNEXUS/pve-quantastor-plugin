@@ -37,13 +37,16 @@ installs a device section for QuantaStor LUNs as
 
    Nothing else needs configuring. Debian's defaults (`find_multipaths strict`,
    `user_friendly_names no`) mean multipathd only claims the LUNs the plugin
-   registers for `multipath 1` storages, never local disks or other storage, and
+   registers for `multipath 1` and Fibre Channel storages, never local disks or other storage, and
    the plugin addresses maps by WWID, so `user_friendly_names` or aliases do not
-   affect it. Storages without `multipath 1` are not touched.
+   affect it. iSCSI storages without `multipath 1` are not touched.
 
    The file is a conffile: local edits are kept across upgrades. If you added the
    same section to `/etc/multipath.conf` for 1.1.0, it is now redundant and can be
    removed (the `conf.d` entry takes precedence).
+
+Fibre Channel storages always use multipath, whatever this setting; see
+[Fibre Channel](fibre-channel.md).
 
 **Enable it** on a new storage with `--multipath 1` on `pvesm add`, the
 *Multipath* checkbox under the Add dialog's advanced options, or on an existing

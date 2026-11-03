@@ -60,7 +60,8 @@ Notes:
 
 ## Web UI
 
-Go to **Datacenter → Storage → Add → QuantaStor**.
+Go to **Datacenter → Storage → Add → QuantaStor**. The Advanced fields appear
+when you tick **Advanced** at the bottom of the dialog.
 
 | Field | Tab | Description |
 |---|---|---|
@@ -71,11 +72,14 @@ Go to **Datacenter → Storage → Add → QuantaStor**.
 | Pool | General | Storage pool name on the QuantaStor appliance. Click the scan button (🔍) to connect to the appliance and populate a dropdown of available pools. |
 | Content | General | `Disk image` (VM disks), `Container` (LXC root filesystems), or both — both are preselected |
 | Nodes | General | Restrict to specific PVE nodes (leave empty for all nodes) |
-| iSCSI Portal | Advanced | Portal address for iSCSI login — defaults to API Host if left blank |
+| Transport | Advanced | `iSCSI` (default) or `Fibre Channel` (see [Fibre Channel](fibre-channel.md)). Fixed after creation. |
+| iSCSI Portal | Advanced | Portal address for iSCSI login — defaults to API Host if left blank; unused with Fibre Channel |
+| Volume Prefix | Advanced | Optional prefix for this storage's volume names on QuantaStor, so several clusters or storage entries can share a pool (see [Sharing one pool with a volume prefix](#sharing-one-pool-with-a-volume-prefix)). Fixed after creation. |
+| Multipath | Advanced | Log in on every portal QuantaStor advertises and give guests a multipath device (see [Multipath (DM-MPIO)](multipath.md)). Off by default; change it only while no guest on the storage is running. Fibre Channel storages always use multipath. |
 | SSL Verify | Advanced | Enable SSL certificate verification — leave off for self-signed certs |
 
-`API Host`, `Username`, and `Pool` are fixed after creation. All other fields can
-be edited later via the UI.
+`API Host`, `Username`, `Pool`, `Transport` and `Volume Prefix` are fixed after
+creation. All other fields can be edited later via the UI.
 
 ## CLI
 
@@ -98,7 +102,12 @@ Single-quote the password so the shell does not interpret special characters
 
 `--portal` and `--ssl_verify` are optional. `--portal` defaults to `--api_host`
 if omitted; `--ssl_verify` defaults to `0` (off, suitable for self-signed
-certificates).
+certificates). `--transport fc` attaches volumes over Fibre Channel instead of
+iSCSI (see [Fibre Channel](fibre-channel.md)); it is fixed after creation.
+`--volume_prefix` lets several clusters or storage entries share one pool (see
+[Sharing one pool with a volume prefix](#sharing-one-pool-with-a-volume-prefix));
+it is also fixed after creation. `--multipath 1` uses every iSCSI portal
+QuantaStor advertises (see [Multipath (DM-MPIO)](multipath.md)).
 
 Volumes are **thin provisioned by default**: they consume pool space as data
 is written, not their full size at creation. Set `sparse 0` on the storage to
@@ -119,12 +128,12 @@ quantastor: my-quantastor
     ssl_verify 0
 ```
 
-`api_host`, `username`, and `pool_id` are fixed after creation. All other
-fields can be updated later via `pvesm set` (or the UI) without removing
-the storage. **Avoid `pvesm remove` + `pvesm add` to apply changes** — the
-remove path runs `on_delete_hook` which deletes the password file across the
-cluster; if the subsequent re-add doesn't capture the password cleanly, you
-end up with the missing-`.pw`-file failure mode described above.
+`api_host`, `username`, `pool_id`, `volume_prefix` and `transport` are fixed
+after creation. All other fields can be updated later via `pvesm set` (or the
+UI) without removing the storage. **Avoid `pvesm remove` + `pvesm add` to apply
+changes** — the remove path runs `on_delete_hook` which deletes the password
+file across the cluster; if the subsequent re-add doesn't capture the password
+cleanly, you end up with the missing-`.pw`-file failure mode described above.
 
 ## QuantaStor HA storage pools
 
@@ -161,13 +170,13 @@ setting you should not change.
 ## Multiple Proxmox clusters on one appliance
 
 Several separate Proxmox clusters can use the same QuantaStor appliance at the
-same time, as long as you follow two rules:
+same time, as long as you follow three rules:
 
-- **Give each Proxmox cluster its own QuantaStor storage pool.** Point each
-  cluster's `pool_id` at a different pool. Never configure two clusters against
-  the same pool. Volumes are named after VM IDs, so two clusters on one pool will
-  see each other's disks as their own. See
-  [One storage pool per Proxmox cluster](limitations.md#one-storage-pool-per-proxmox-cluster).
+- **Give each Proxmox cluster its own QuantaStor storage pool, or its own
+  volume prefix.** Volumes are named after VM IDs, so two clusters on one pool
+  without prefixes see each other's disks as their own. To share a pool, add the
+  storage on each cluster with a different `volume_prefix` (see below). See
+  [Sharing a storage pool between Proxmox clusters](limitations.md#sharing-a-storage-pool-between-proxmox-clusters).
 - **Give every node a unique iSCSI initiator name, across all clusters.**
   QuantaStor grants volume access per initiator name. If two nodes share an
   initiator name, QuantaStor treats them as one host. That is common when nodes
@@ -180,6 +189,48 @@ same time, as long as you follow two rules:
 
   If any two nodes match, see
   [Storage only works on one cluster at a time](troubleshooting.md#storage-only-works-on-one-cluster-at-a-time).
+- **Give every node a unique hostname, across all clusters.** The plugin
+  registers each node on QuantaStor as `<hostname>-pve`. If a node in another
+  cluster has the same hostname (for example both clusters have a `pve1`),
+  QuantaStor adds its initiator name to the existing host entry, and the two
+  nodes again share one host. Compare `hostname` on every node of every cluster.
+
+### Sharing one pool with a volume prefix
+
+`volume_prefix` is put in front of every QuantaStor volume name the storage
+creates, so `vm-100-disk-0` is stored on QuantaStor as `clusterA-vm-100-disk-0`.
+Proxmox still calls the disk `vm-100-disk-0`; VM configs do not change. The
+storage only lists volumes that carry its own prefix, so each cluster sees only
+its own disks:
+
+```bash
+# On cluster A
+pvesm add quantastor qs-shared --api_host 10.0.0.1 --username admin \
+  --password '<password>' --pool_id pool-1 --content images,rootdir \
+  --volume_prefix clusterA-
+# On cluster B: same pool, different prefix
+pvesm add quantastor qs-shared --api_host 10.0.0.1 --username admin \
+  --password '<password>' --pool_id pool-1 --content images,rootdir \
+  --volume_prefix clusterB-
+```
+
+- Set it when you add the storage (Advanced, **Volume Prefix**, in the web UI).
+  It cannot be changed or removed later, because the existing volumes would no
+  longer be found.
+- Use letters, digits, `-`, `_` and `.`, starting with a letter or digit, up to
+  32 characters. End it with `-` to keep names readable. Prefixes that could
+  make one storage list or collide with another storage's volumes are refused:
+  one that starts like a Proxmox disk name (`vm-1`, `base-2`), contains one
+  (`c-vm-7-`), or ends in `template-`.
+- One cluster on the pool may keep a storage without a prefix (for example the
+  cluster that used the pool first): it does not list prefixed volumes, and
+  prefixed storages do not list its volumes. Every other cluster needs its own
+  prefix.
+- Snapshots and template volumes get the prefix too, so `qs volume-list` on
+  QuantaStor shows which cluster each volume belongs to.
+- The same applies to two storage entries in one cluster: they may share a pool
+  only with different prefixes (see
+  [One storage entry per pool within a cluster](limitations.md#one-storage-entry-per-pool-within-a-cluster)).
 
 ## Multipath
 

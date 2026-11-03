@@ -15,12 +15,14 @@ What each file in the repository does, and the public interface of each Perl mod
 │           │   └── QuantaStor.pm     PVE custom plugin — registers type 'quantastor'
 │           └── QuantaStor/
 │               ├── APIClient.pm      REST client for QuantaStor API
-│               └── ISCSIManager.pm   iSCSI initiator lifecycle management
+│               ├── ISCSIManager.pm   iSCSI initiator lifecycle management
+│               └── FCManager.pm      Fibre Channel attach/detach (transport fc)
 ├── t/
-│   ├── 01-api-client.t               Unit tests — APIClient (50 tests)
-│   ├── 02-iscsi-manager.t            Unit tests — ISCSIManager (42 tests)
+│   ├── 01-api-client.t               Unit tests — APIClient (58 tests)
+│   ├── 02-iscsi-manager.t            Unit tests — ISCSIManager (61 tests)
 │   ├── 03-integration.t              Integration tests (requires live appliance)
-│   ├── 04-plugin.t                   Unit tests — QuantaStorPlugin (65 tests)
+│   ├── 04-plugin.t                   Unit tests — QuantaStorPlugin (118 tests)
+│   ├── 06-fc-manager.t               Unit tests — FCManager (18 tests, simulated /sys and /dev)
 │   ├── run_tests.sh                  Test runner script
 │   └── lib/Test/QuantaStor/
 │       ├── MockUA.pm                 Mock LWP::UserAgent for APIClient tests
@@ -54,7 +56,7 @@ my $client = PVE::Storage::QuantaStor::APIClient->new(
     ssl_verify => 0,          # default off; set 1 to verify against the
                               # system CA bundle, or pass ca_cert => '/path.pem'
                               # to verify against a custom CA
-    timeout    => 30,         # default
+    timeout    => 120,        # default
     logger     => sub { my ($level, $msg) = @_; ... },
 );
 ```
@@ -121,6 +123,34 @@ my $iscsi = PVE::Storage::QuantaStor::ISCSIManager->new(
 Device paths use `/dev/disk/by-path/` for stability across reboots, unlike ephemeral
 `/dev/sdX` assignments. The multipath methods are used only for storages with
 `multipath 1` (see [Multipath](../docs/multipath.md)).
+
+---
+
+### `PVE::Storage::QuantaStor::FCManager`
+
+Fibre Channel counterpart of `ISCSIManager`, used for storages with `transport fc`
+(see [Fibre Channel](../docs/fibre-channel.md)). Works through sysfs and
+`multipath`/`multipathd`; filesystem and command access is injectable for tests.
+
+```perl
+my $fc = PVE::Storage::QuantaStor::FCManager->new(
+    logger => sub { my ($level, $msg) = @_; ... },
+);
+```
+
+| Method | Description |
+|---|---|
+| `initiator_ids()` / `initiator_id()` | Every local HBA port WWPN (16 lowercase hex digits), sorted; the first identifies the node. Dies when the node has no FC HBA |
+| `normalize_wwpn($raw)` | Class method: any WWPN spelling to 16 lowercase hex digits |
+| `is_exported($vol)` | True when the volume has a 24-character `deviceDescriptor` |
+| `wwid($vol)` | Linux WWID: `3` + `62000000` + descriptor |
+| `attach($vol)` | Rescan every HBA; no-op when the LUN is already visible |
+| `add_map($wwid, $max_wait)` | `multipath -a` + build the map, rescanning until every online target port has a path (default 30 s) |
+| `detach($vol)` | Flush the multipath map (if any) and delete every SCSI device for the WWID |
+| `is_attached($vol)` / `wait_for_attached` / `wait_for_detached` | Presence of the by-id link (and, for detach, of `/sys/block` devices) |
+| `volume_device_path($vol)` | Multipath by-id link when present, else the single-path link |
+| `rescan_volume($vol)` | Per-path capacity rescan plus `multipathd resize map` |
+| `missing_device_hint()` | Text for errors when the LUN never appears (zoning, target ports) |
 
 ---
 
