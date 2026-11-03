@@ -10,10 +10,10 @@ storage backend for virtual machines and containers.
 
 | Component | State |
 |---|---|
-| `QuantaStor/APIClient.pm` | Complete — clean REST client, 50 unit tests |
+| `QuantaStor/APIClient.pm` | Complete — clean REST client, 58 unit tests |
 | `QuantaStor/ISCSIManager.pm` | Complete — clean iSCSI lifecycle, 61 unit tests |
-| `QuantaStor/FCManager.pm` | Complete — Fibre Channel attach and detach, unit tests against a simulated `/sys` and `/dev` |
-| `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 80 unit tests |
+| `QuantaStor/FCManager.pm` | Complete — Fibre Channel attach and detach, 18 unit tests against a simulated `/sys` and `/dev` |
+| `Custom/QuantaStor.pm` (first-class type) | Complete — all PVE hooks implemented, 118 unit tests |
 | Debian packaging | Complete — `pve-storage-quantastor_1.2.0-1_all.deb` |
 
 ---
@@ -54,7 +54,7 @@ Add → **QuantaStor**.
 | [Fibre Channel](docs/fibre-channel.md) | Attaching volumes over FC instead of iSCSI: requirements, zoning, adding the storage, troubleshooting |
 | [Container (LXC) support](docs/containers.md) | How container volumes work and their limitations |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and how to resolve them |
-| [Known limitations and supported versions](docs/limitations.md) | Behavior to know about, one storage pool per Proxmox cluster, supported Proxmox VE versions, mixed-version clusters |
+| [Known limitations and supported versions](docs/limitations.md) | Behavior to know about, sharing a pool between clusters, linked clones, supported Proxmox VE versions, mixed-version clusters |
 | [Architecture](docs/architecture.md) | How the plugin sits between Proxmox VE and the QuantaStor REST API |
 | [Source layout and module reference](src/README.md) | What each file does, the Perl module interfaces, the PVE hooks |
 | [Running the tests](t/README.md) | Unit and integration tests |

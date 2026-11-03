@@ -104,6 +104,10 @@ Single-quote the password so the shell does not interpret special characters
 if omitted; `--ssl_verify` defaults to `0` (off, suitable for self-signed
 certificates). `--transport fc` attaches volumes over Fibre Channel instead of
 iSCSI (see [Fibre Channel](fibre-channel.md)); it is fixed after creation.
+`--volume_prefix` lets several clusters or storage entries share one pool (see
+[Sharing one pool with a volume prefix](#sharing-one-pool-with-a-volume-prefix));
+it is also fixed after creation. `--multipath 1` uses every iSCSI portal
+QuantaStor advertises (see [Multipath (DM-MPIO)](multipath.md)).
 
 Volumes are **thin provisioned by default**: they consume pool space as data
 is written, not their full size at creation. Set `sparse 0` on the storage to
@@ -124,12 +128,12 @@ quantastor: my-quantastor
     ssl_verify 0
 ```
 
-`api_host`, `username`, `pool_id`, `volume_prefix` and `transport` are fixed after creation. All other
-fields can be updated later via `pvesm set` (or the UI) without removing
-the storage. **Avoid `pvesm remove` + `pvesm add` to apply changes** — the
-remove path runs `on_delete_hook` which deletes the password file across the
-cluster; if the subsequent re-add doesn't capture the password cleanly, you
-end up with the missing-`.pw`-file failure mode described above.
+`api_host`, `username`, `pool_id`, `volume_prefix` and `transport` are fixed
+after creation. All other fields can be updated later via `pvesm set` (or the
+UI) without removing the storage. **Avoid `pvesm remove` + `pvesm add` to apply
+changes** — the remove path runs `on_delete_hook` which deletes the password
+file across the cluster; if the subsequent re-add doesn't capture the password
+cleanly, you end up with the missing-`.pw`-file failure mode described above.
 
 ## QuantaStor HA storage pools
 

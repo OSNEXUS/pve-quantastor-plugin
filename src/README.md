@@ -18,11 +18,11 @@ What each file in the repository does, and the public interface of each Perl mod
 │               ├── ISCSIManager.pm   iSCSI initiator lifecycle management
 │               └── FCManager.pm      Fibre Channel attach/detach (transport fc)
 ├── t/
-│   ├── 01-api-client.t               Unit tests — APIClient (50 tests)
-│   ├── 02-iscsi-manager.t            Unit tests — ISCSIManager (42 tests)
+│   ├── 01-api-client.t               Unit tests — APIClient (58 tests)
+│   ├── 02-iscsi-manager.t            Unit tests — ISCSIManager (61 tests)
 │   ├── 03-integration.t              Integration tests (requires live appliance)
-│   ├── 04-plugin.t                   Unit tests — QuantaStorPlugin (65 tests)
-│   ├── 06-fc-manager.t               Unit tests — FCManager (simulated /sys and /dev)
+│   ├── 04-plugin.t                   Unit tests — QuantaStorPlugin (118 tests)
+│   ├── 06-fc-manager.t               Unit tests — FCManager (18 tests, simulated /sys and /dev)
 │   ├── run_tests.sh                  Test runner script
 │   └── lib/Test/QuantaStor/
 │       ├── MockUA.pm                 Mock LWP::UserAgent for APIClient tests
