@@ -60,7 +60,8 @@ Notes:
 
 ## Web UI
 
-Go to **Datacenter → Storage → Add → QuantaStor**.
+Go to **Datacenter → Storage → Add → QuantaStor**. The Advanced fields appear
+when you tick **Advanced** at the bottom of the dialog.
 
 | Field | Tab | Description |
 |---|---|---|
@@ -73,10 +74,12 @@ Go to **Datacenter → Storage → Add → QuantaStor**.
 | Nodes | General | Restrict to specific PVE nodes (leave empty for all nodes) |
 | Transport | Advanced | `iSCSI` (default) or `Fibre Channel` (see [Fibre Channel](fibre-channel.md)). Fixed after creation. |
 | iSCSI Portal | Advanced | Portal address for iSCSI login — defaults to API Host if left blank; unused with Fibre Channel |
+| Volume Prefix | Advanced | Optional prefix for this storage's volume names on QuantaStor, so several clusters or storage entries can share a pool (see [Sharing one pool with a volume prefix](#sharing-one-pool-with-a-volume-prefix)). Fixed after creation. |
+| Multipath | Advanced | Log in on every portal QuantaStor advertises and give guests a multipath device (see [Multipath (DM-MPIO)](multipath.md)). Off by default; change it only while no guest on the storage is running. Fibre Channel storages always use multipath. |
 | SSL Verify | Advanced | Enable SSL certificate verification — leave off for self-signed certs |
 
-`API Host`, `Username`, and `Pool` are fixed after creation. All other fields can
-be edited later via the UI.
+`API Host`, `Username`, `Pool`, `Transport` and `Volume Prefix` are fixed after
+creation. All other fields can be edited later via the UI.
 
 ## CLI
 
