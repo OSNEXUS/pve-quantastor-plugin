@@ -18,3 +18,7 @@ patches/**/src/
 
 # Developer working notes (not part of the public release)
 DEVNOTES.md
+
+# Claude Code per-developer settings (permissions etc) - not shared
+.claude/settings.local.json
+.claude/*.local.*
